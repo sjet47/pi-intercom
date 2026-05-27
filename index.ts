@@ -22,7 +22,8 @@ const SUBAGENT_RUN_ID_ENV = "PI_SUBAGENT_RUN_ID";
 const SUBAGENT_CHILD_AGENT_ENV = "PI_SUBAGENT_CHILD_AGENT";
 const SUBAGENT_CHILD_INDEX_ENV = "PI_SUBAGENT_CHILD_INDEX";
 const SUBAGENT_INTERCOM_SESSION_NAME_ENV = "PI_SUBAGENT_INTERCOM_SESSION_NAME";
-const INTERCOM_NAME_FLAG = "intercom-name";
+const INTERCOM_SESSION_NAME_ENV = "PI_INTERCOM_NAME";
+const PI_SESSION_NAME_ENV = "PI_SESSION_NAME";
 
 interface ChildOrchestratorMetadata {
   orchestratorTarget: string;
@@ -925,9 +926,9 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
     sessionStartedAt = Date.now();
     agentRunning = false;
     activeTools.clear();
-    const startupIntercomName = pi.getFlag(INTERCOM_NAME_FLAG);
-    if (typeof startupIntercomName === "string" && startupIntercomName.trim()) {
-      pi.setSessionName(startupIntercomName.trim());
+    const startupIntercomName = process.env[INTERCOM_SESSION_NAME_ENV]?.trim() || process.env[PI_SESSION_NAME_ENV]?.trim();
+    if (startupIntercomName) {
+      pi.setSessionName(startupIntercomName);
     }
     const startupGeneration = runtimeGeneration;
     startupConnectTimer = setTimeout(() => {
@@ -1023,11 +1024,6 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
         status: currentStatus(),
       });
     }
-  });
-
-  pi.registerFlag(INTERCOM_NAME_FLAG, {
-    description: "Set the pi session name and immediately sync pi-intercom presence at startup",
-    type: "string",
   });
 
 

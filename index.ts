@@ -22,6 +22,7 @@ const SUBAGENT_RUN_ID_ENV = "PI_SUBAGENT_RUN_ID";
 const SUBAGENT_CHILD_AGENT_ENV = "PI_SUBAGENT_CHILD_AGENT";
 const SUBAGENT_CHILD_INDEX_ENV = "PI_SUBAGENT_CHILD_INDEX";
 const SUBAGENT_INTERCOM_SESSION_NAME_ENV = "PI_SUBAGENT_INTERCOM_SESSION_NAME";
+const INTERCOM_NAME_FLAG = "intercom-name";
 
 interface ChildOrchestratorMetadata {
   orchestratorTarget: string;
@@ -924,6 +925,10 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
     sessionStartedAt = Date.now();
     agentRunning = false;
     activeTools.clear();
+    const startupIntercomName = pi.getFlag(INTERCOM_NAME_FLAG);
+    if (typeof startupIntercomName === "string" && startupIntercomName.trim()) {
+      pi.setSessionName(startupIntercomName.trim());
+    }
     const startupGeneration = runtimeGeneration;
     startupConnectTimer = setTimeout(() => {
       startupConnectTimer = null;
@@ -1020,23 +1025,11 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
     }
   });
 
-
-  pi.registerCommand("intercom-name", {
-    description: "Set the pi session name and immediately sync pi-intercom presence (usage: /intercom-name <name>)",
-    handler: async (args, ctx) => {
-      const name = args.trim();
-      if (!name) {
-        const current = pi.getSessionName();
-        ctx.ui.notify(current ? `Intercom session name: ${current}` : "Usage: /intercom-name <name>", "info");
-        return;
-      }
-
-      pi.setSessionName(name);
-      currentSessionId = ctx.sessionManager.getSessionId();
-      syncPresenceIdentity(currentSessionId);
-      ctx.ui.notify(`Intercom session name synced: ${name}`, "info");
-    },
+  pi.registerFlag(INTERCOM_NAME_FLAG, {
+    description: "Set the pi session name and immediately sync pi-intercom presence at startup",
+    type: "string",
   });
+
 
   pi.registerMessageRenderer("intercom_message", (message, _options, theme) => {
     const details = message.details as { from: SessionInfo; message: Message; replyCommand?: string; bodyText?: string } | undefined;

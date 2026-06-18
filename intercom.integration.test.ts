@@ -249,6 +249,7 @@ function waitForReply(client: InstanceType<typeof IntercomClient>, replyTo: stri
   });
 }
 
+
 async function waitForSessionByName(client: InstanceType<typeof IntercomClient>, name: string): Promise<SessionInfo> {
   const deadline = Date.now() + 2000;
   while (Date.now() < deadline) {
@@ -964,6 +965,44 @@ test("async ask can be replied to later from the single pending ask fallback", {
     assert.equal(reply.message.content.text, "Answering later worked.");
     assert.equal(reply.message.replyTo, askId);
   } finally {
+    await cleanup();
+  }
+});
+
+test("intercom ask supports concurrent pending replies", { concurrency: false }, async () => {
+  const { default: piIntercomExtension } = await import("./index.ts");
+  const { planner, orchestrator, cleanup } = await setupClients();
+
+  try {
+    const harness = createExtensionHarness("planner");
+    piIntercomExtension(harness.pi as never);
+    await harness.emitLifecycle("session_start");
+    const intercomTool = harness.tools.find((tool) => tool.name === "intercom")!;
+
+    const firstMessagePromise = once(orchestrator, "message") as Promise<[SessionInfo, Message]>;
+    const firstResultPromise = intercomTool.execute("ask-a", { action: "ask", to: "orchestrator", message: "Question A?" }, new AbortController().signal, undefined, harness.ctx);
+    const [firstFrom, firstMessage] = await firstMessagePromise;
+
+    const secondMessagePromise = once(orchestrator, "message") as Promise<[SessionInfo, Message]>;
+    const secondResultPromise = intercomTool.execute("ask-b", { action: "ask", to: "orchestrator", message: "Question B?" }, new AbortController().signal, undefined, harness.ctx);
+    const [secondFrom, secondMessage] = await secondMessagePromise;
+
+    assert.equal(firstMessage.expectsReply, true);
+    assert.equal(secondMessage.expectsReply, true);
+    assert.notEqual(firstMessage.id, secondMessage.id);
+
+    await orchestrator.send(secondFrom.id, { text: "Answer B", replyTo: secondMessage.id });
+    await orchestrator.send(firstFrom.id, { text: "Answer A", replyTo: firstMessage.id });
+
+    const firstResult = await firstResultPromise;
+    const secondResult = await secondResultPromise;
+    assert.equal(firstResult.isError, false);
+    assert.equal(secondResult.isError, false);
+    assert.match(firstResult.content[0]?.text ?? "", /Answer A/);
+    assert.match(secondResult.content[0]?.text ?? "", /Answer B/);
+    await harness.emitLifecycle("session_shutdown");
+  } finally {
+    await planner.disconnect().catch(() => undefined);
     await cleanup();
   }
 });

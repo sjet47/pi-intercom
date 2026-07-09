@@ -569,6 +569,57 @@ test("busy non-interactive sessions auto-reply to top-level asks without abortin
   }
 });
 
+test("busy non-interactive sessions record missed messages in session history", { concurrency: false }, async () => {
+  const { default: piIntercomExtension } = await import("./index.ts");
+  const { planner, cleanup } = await setupClients();
+  const harness = createExtensionHarness("busy-pipe-worker", {
+    hasUI: false,
+    isIdle: () => false,
+  });
+
+  try {
+    piIntercomExtension(harness.pi as never);
+    await harness.emitLifecycle("session_start");
+
+    const target = await waitForSessionByName(planner, "busy-pipe-worker");
+
+    const askId = "busy-missed-ask";
+    const replyPromise = waitForReply(planner, askId, 1000);
+    const delivered = await planner.send(target.id, {
+      messageId: askId,
+      text: "Please handle this while you are busy.",
+      expectsReply: true,
+    });
+    assert.equal(delivered.delivered, true);
+
+    const reply = await replyPromise;
+    assert.equal(reply.message.replyTo, askId);
+    assert.match(reply.message.content.text, /recorded in its session history/);
+    assert.match(reply.message.content.text, /will not be processed/);
+
+    const missed = harness.entries.filter((entry) => entry.type === "intercom_missed");
+    assert.equal(missed.length, 1);
+    const data = missed[0]!.data as {
+      from: string;
+      message: { text: string };
+      messageId: string;
+      timestamp: number;
+      reason: string;
+    };
+    assert.equal(data.from, "planner");
+    assert.equal(data.message.text, "Please handle this while you are busy.");
+    assert.equal(data.messageId, askId);
+    assert.equal(data.reason, "busy_non_interactive");
+    assert.equal(typeof data.timestamp, "number");
+
+    // The busy session must not have been triggered with the message.
+    assert.equal(harness.sentMessages.length, 0);
+  } finally {
+    await harness.emitLifecycle("session_shutdown");
+    await cleanup();
+  }
+});
+
 test("supervisor tool registers only when child metadata is present", async () => {
   const { default: piIntercomExtension } = await import("./index.ts");
 

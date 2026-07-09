@@ -679,11 +679,18 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
       }
       if (!activeContext.isIdle()) {
         if (!activeContext.hasUI) {
+          pi.appendEntry("intercom_missed", {
+            from: from.name || from.id,
+            message: { text: message.content.text, attachments: message.content.attachments },
+            messageId: message.id,
+            timestamp: message.timestamp,
+            reason: "busy_non_interactive",
+          });
           const activeClient = client;
           if (!message.replyTo && activeClient?.isConnected()) {
             try {
               const result = await activeClient.send(from.id, {
-                text: "This agent is running in non-interactive mode and cannot respond to intercom messages while it is working. It will continue its current task and exit when done.",
+                text: "This agent is running in non-interactive mode and cannot act on intercom messages while it is working. Your message was recorded in its session history but will not be processed; resend later if action is needed.",
                 replyTo: message.id,
               });
               if (result.delivered && getLiveContext(liveContext, messageGeneration)) {

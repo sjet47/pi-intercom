@@ -3,8 +3,8 @@ import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { homedir } from "os";
-import net from "net";
 import { getBrokerSocketPath } from "./paths.js";
+import { checkSocketConnectable } from "./socket-check.js";
 
 const INTERCOM_DIR = join(homedir(), ".pi/agent/intercom");
 const EXTENSION_DIR = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -193,7 +193,7 @@ export async function spawnBrokerIfNeeded(brokerCommand: string, brokerArgs: str
 }
 
 async function isBrokerRunning(): Promise<boolean> {
-  if (await checkSocketConnectable()) {
+  if (await checkSocketConnectable(BROKER_SOCKET)) {
     return true;
   }
 
@@ -203,37 +203,11 @@ async function isBrokerRunning(): Promise<boolean> {
     const pid = parseInt(readFileSync(BROKER_PID, "utf-8").trim(), 10);
     if (!Number.isFinite(pid)) return false;
     process.kill(pid, 0);
-    return checkSocketConnectable();
+    return checkSocketConnectable(BROKER_SOCKET);
   } catch {
     // Missing or unreadable PID state means there is no live broker to reuse.
     return false;
   }
-}
-
-function checkSocketConnectable(): Promise<boolean> {
-  return new Promise((resolve) => {
-    const socket = net.connect(BROKER_SOCKET);
-    const finish = (isConnected: boolean) => {
-      clearTimeout(timeout);
-      socket.off("connect", onConnect);
-      socket.off("error", onError);
-      resolve(isConnected);
-    };
-    const onConnect = () => {
-      socket.end();
-      finish(true);
-    };
-    const onError = () => {
-      socket.destroy();
-      finish(false);
-    };
-    socket.on("connect", onConnect);
-    socket.on("error", onError);
-    const timeout = setTimeout(() => {
-      socket.destroy();
-      finish(false);
-    }, 1000);
-  });
 }
 
 function acquireSpawnLock(): boolean {
@@ -298,7 +272,7 @@ function releaseSpawnLock(): void {
 async function waitForBroker(timeoutMs = 5000): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    if (await checkSocketConnectable()) {
+    if (await checkSocketConnectable(BROKER_SOCKET)) {
       return;
     }
     await sleep(100);

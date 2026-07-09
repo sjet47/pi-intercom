@@ -1,15 +1,46 @@
 import net from "net";
-import { writeFileSync, unlinkSync, mkdirSync } from "fs";
+import { writeFileSync, unlinkSync, mkdirSync, appendFileSync, renameSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import { randomUUID } from "crypto";
 import { writeMessage, createMessageReader } from "./framing.js";
 import { getBrokerSocketPath } from "./paths.js";
+import { checkSocketConnectable } from "./socket-check.js";
 import type { SessionInfo, Message, Attachment, BrokerMessage } from "../types.js";
 
 const INTERCOM_DIR = join(homedir(), ".pi/agent/intercom");
 const SOCKET_PATH = getBrokerSocketPath();
 const PID_PATH = join(INTERCOM_DIR, "broker.pid");
+const LOG_PATH = join(INTERCOM_DIR, "broker.log");
+const OLD_LOG_PATH = join(INTERCOM_DIR, "broker.log.old");
+
+function rotateLog(): void {
+  try {
+    renameSync(LOG_PATH, OLD_LOG_PATH);
+  } catch {
+    // Best effort: there may be no previous log, or the rename may fail.
+  }
+}
+
+function appendLogLine(message: string): void {
+  try {
+    appendFileSync(LOG_PATH, `${new Date().toISOString()} ${message}\n`);
+  } catch {
+    // Logging must never take the broker down.
+  }
+}
+
+/** Log to broker.log and stdout (stdout is watched by tests for readiness). */
+function log(message: string): void {
+  appendLogLine(message);
+  console.log(message);
+}
+
+/** Log to broker.log and stderr. */
+function logError(message: string): void {
+  appendLogLine(message);
+  console.error(message);
+}
 
 interface ConnectedSession {
   socket: net.Socket;
@@ -100,24 +131,21 @@ class IntercomBroker {
   private shutdownTimer: NodeJS.Timeout | null = null;
 
   constructor() {
-    mkdirSync(INTERCOM_DIR, { recursive: true });
-    if (process.platform !== "win32") {
-      try {
-        unlinkSync(SOCKET_PATH);
-      } catch {
-        // A clean startup has no stale socket to remove.
-      }
-    }
     this.server = net.createServer(this.handleConnection.bind(this));
   }
 
   start(): void {
+    this.server.on("error", (error) => {
+      logError(`Broker server error: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
+      process.exit(1);
+    });
     this.server.listen(SOCKET_PATH, () => {
       writeFileSync(PID_PATH, String(process.pid));
-      console.log(`Intercom broker started (pid: ${process.pid})`);
+      log(`Intercom broker started (pid: ${process.pid})`);
+      appendLogLine(`Listening on ${SOCKET_PATH}`);
     });
-    process.on("SIGTERM", () => this.shutdown());
-    process.on("SIGINT", () => this.shutdown());
+    process.on("SIGTERM", () => this.shutdown("received SIGTERM"));
+    process.on("SIGINT", () => this.shutdown("received SIGINT"));
   }
 
   private handleConnection(socket: net.Socket): void {
@@ -128,6 +156,7 @@ class IntercomBroker {
         sessionId = id;
       });
     }, (error) => {
+      logError(`Protocol error${sessionId ? ` (session ${sessionId})` : ""}, closing connection: ${error.message}`);
       socket.destroy(error);
     });
 
@@ -143,7 +172,7 @@ class IntercomBroker {
     });
 
     socket.on("error", (error) => {
-      console.error("Socket error:", error);
+      logError(`Socket error${sessionId ? ` (session ${sessionId})` : ""}: ${error.message}`);
     });
   }
 
@@ -153,8 +182,7 @@ class IntercomBroker {
     this.shutdownTimer = setTimeout(() => {
       this.shutdownTimer = null;
       if (this.sessions.size === 0) {
-        console.log("No sessions connected, shutting down");
-        this.shutdown();
+        this.shutdown("no sessions connected");
       }
     }, 5000);
   }
@@ -201,8 +229,9 @@ class IntercomBroker {
       }
 
       case "unregister": {
-        this.sessions.delete(currentId);
-        this.broadcast({ type: "session_left", sessionId: currentId }, currentId);
+        // currentId is non-null here: non-register messages before register throw above.
+        this.sessions.delete(currentId!);
+        this.broadcast({ type: "session_left", sessionId: currentId! }, currentId!);
         setId(null);
         this.scheduleShutdownCheck();
         break;
@@ -233,7 +262,8 @@ class IntercomBroker {
 
         const targets = this.findSessions(clientMessage.to);
         if (targets.length === 1) {
-          const fromSession = this.sessions.get(currentId);
+          // currentId is non-null here: non-register messages before register throw above.
+          const fromSession = this.sessions.get(currentId!);
           if (!fromSession) {
             writeMessage(socket, {
               type: "delivery_failed",
@@ -269,7 +299,8 @@ class IntercomBroker {
       }
 
       case "presence": {
-        const session = this.sessions.get(currentId);
+        // currentId is non-null here: non-register messages before register throw above.
+        const session = this.sessions.get(currentId!);
         if (session) {
           if (clientMessage.name !== undefined) {
             if (typeof clientMessage.name !== "string") {
@@ -290,7 +321,7 @@ class IntercomBroker {
             session.info.model = clientMessage.model;
           }
           session.info.lastActivity = Date.now();
-          this.broadcast({ type: "presence_update", session: session.info }, currentId);
+          this.broadcast({ type: "presence_update", session: session.info }, currentId!);
         }
         break;
       }
@@ -318,9 +349,9 @@ class IntercomBroker {
     }
   }
 
-  private shutdown(): void {
-    console.log("Broker shutting down");
-    
+  private shutdown(reason: string): void {
+    log(`Broker shutting down (${reason})`);
+
     for (const session of this.sessions.values()) {
       session.socket.end();
     }
@@ -342,4 +373,27 @@ class IntercomBroker {
   }
 }
 
-new IntercomBroker().start();
+async function main(): Promise<void> {
+  mkdirSync(INTERCOM_DIR, { recursive: true });
+
+  if (await checkSocketConnectable(SOCKET_PATH)) {
+    // Do not rotate here: the log currently belongs to the live broker.
+    log(`Another intercom broker is already listening on ${SOCKET_PATH}, exiting`);
+    process.exit(0);
+  }
+
+  rotateLog();
+
+  if (process.platform !== "win32") {
+    try {
+      unlinkSync(SOCKET_PATH);
+      appendLogLine(`Removed stale socket at ${SOCKET_PATH}`);
+    } catch {
+      // A clean startup has no stale socket to remove.
+    }
+  }
+
+  new IntercomBroker().start();
+}
+
+void main();

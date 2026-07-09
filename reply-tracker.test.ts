@@ -53,6 +53,54 @@ test("reply with to resolves matching pending ask", () => {
   assert.equal(tracker.resolveReplyTarget({ to: "planner-id" }, 1002).message.id, "ask-1");
 });
 
+test("reply with to prefers matching pending ask over non-matching current turn context", () => {
+  const tracker = new ReplyTracker();
+  const contextA = tracker.recordIncomingMessage(createSession("a-id", "session-a"), createMessage("ask-a", "From A"), 1000);
+  tracker.recordIncomingMessage(createSession("b-id", "session-b"), createMessage("ask-b", "From B"), 1001);
+  tracker.queueTurnContext(contextA);
+  tracker.beginTurn(1002);
+
+  const target = tracker.resolveReplyTarget({ to: "session-b" }, 1003);
+  assert.equal(target.message.id, "ask-b");
+  assert.equal(target.from.id, "b-id");
+});
+
+test("reply with non-matching to errors instead of falling back to sole pending ask", () => {
+  const tracker = new ReplyTracker();
+  tracker.recordIncomingMessage(createSession("a-id", "session-a"), createMessage("ask-a", "From A"), 1000);
+
+  assert.throws(() => tracker.resolveReplyTarget({ to: "session-b" }, 1001), /No pending ask from "session-b"/);
+});
+
+test("reply with non-matching to errors instead of falling back to current turn context", () => {
+  const tracker = new ReplyTracker();
+  const contextA = tracker.recordIncomingMessage(createSession("a-id", "session-a"), createMessage("ask-a", "From A"), 1000);
+  tracker.queueTurnContext(contextA);
+  tracker.beginTurn(1001);
+
+  assert.throws(() => tracker.resolveReplyTarget({ to: "session-b" }, 1002), /No pending ask from "session-b"/);
+});
+
+test("reply with to matching current turn context returns it", () => {
+  const tracker = new ReplyTracker();
+  const contextA = tracker.recordIncomingMessage(createSession("a-id", "session-a"), createMessage("ask-a", "From A"), 1000);
+  tracker.recordIncomingMessage(createSession("b-id", "session-b"), createMessage("ask-b", "From B"), 1001);
+  tracker.queueTurnContext(contextA);
+  tracker.beginTurn(1002);
+
+  assert.equal(tracker.resolveReplyTarget({ to: "session-a" }, 1003).message.id, "ask-a");
+  assert.equal(tracker.resolveReplyTarget({ to: "a-id" }, 1003).message.id, "ask-a");
+});
+
+test("reply with to errors when multiple pending asks share the same name", () => {
+  const tracker = new ReplyTracker();
+  tracker.recordIncomingMessage(createSession("worker-1", "worker"), createMessage("ask-1", "First"), 1000);
+  tracker.recordIncomingMessage(createSession("worker-2", "worker"), createMessage("ask-2", "Second"), 1001);
+
+  assert.throws(() => tracker.resolveReplyTarget({ to: "worker" }, 1002), /Multiple pending asks from "worker"/);
+  assert.equal(tracker.resolveReplyTarget({ to: "worker-2" }, 1002).message.id, "ask-2");
+});
+
 test("reply errors when no context and no pending asks", () => {
   const tracker = new ReplyTracker();
 

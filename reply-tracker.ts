@@ -51,6 +51,21 @@ export class ReplyTracker {
   resolveReplyTarget(options: { to?: string }, now = Date.now()): IntercomContext {
     this.pruneExpired(now);
 
+    if (options.to) {
+      if (this.currentTurnContext && matchesPendingSender(this.currentTurnContext, options.to)) {
+        return this.currentTurnContext;
+      }
+
+      const matches = Array.from(this.pendingAsks.values()).filter((context) => matchesPendingSender(context, options.to!));
+      if (matches.length === 1) {
+        return matches[0]!;
+      }
+      if (matches.length > 1) {
+        throw new Error(`Multiple pending asks from \"${options.to}\" — use the sender session ID instead.`);
+      }
+      throw new Error(`No pending ask from \"${options.to}\"`);
+    }
+
     if (this.currentTurnContext) {
       return this.currentTurnContext;
     }
@@ -58,19 +73,6 @@ export class ReplyTracker {
     const pending = Array.from(this.pendingAsks.values());
     if (pending.length === 1) {
       return pending[0]!;
-    }
-
-    if (options.to) {
-      const matches = pending.filter((context) => matchesPendingSender(context, options.to!));
-      if (matches.length === 1) {
-        return matches[0]!;
-      }
-      if (matches.length > 1) {
-        throw new Error(`Multiple pending asks from \"${options.to}\" — use the sender session ID instead.`);
-      }
-      if (pending.length > 1) {
-        throw new Error(`No pending ask from \"${options.to}\"`);
-      }
     }
 
     if (pending.length === 0) {

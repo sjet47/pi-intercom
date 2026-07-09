@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # package-lock.json is gitignored (peer deps are intentionally resolved to
+      # their latest versions on every CI run), so `npm ci` and setup-node's
+      # `cache: npm` cannot be used here: both require a committed lockfile.
+      - run: npm install
+      - run: npm run check
+      - run: npm test
+        timeout-minutes: 10

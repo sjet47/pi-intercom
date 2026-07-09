@@ -25,6 +25,11 @@ const SUBAGENT_INTERCOM_SESSION_NAME_ENV = "PI_SUBAGENT_INTERCOM_SESSION_NAME";
 const INTERCOM_SESSION_NAME_ENV = "PI_INTERCOM_NAME";
 const PI_SESSION_NAME_ENV = "PI_SESSION_NAME";
 
+// Type-only marker for tool results that intentionally omit `details` at runtime.
+// ToolDefinition's AgentToolResult requires the `details` key at the type level, but
+// spreading this empty object adds no property, so runtime behavior is unchanged.
+const NO_DETAILS = {} as { details: unknown };
+
 interface ChildOrchestratorMetadata {
   orchestratorTarget: string;
   runId: string;
@@ -791,7 +796,9 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
         }
         throw toError(error);
       } finally {
-        if (reconnectPromise === nextReconnectPromise) {
+        // The `!` only silences TS2454: this finally block runs after the first await,
+        // by which time the const below has been assigned.
+        if (reconnectPromise === nextReconnectPromise!) {
           reconnectPromise = null;
           reconnectPromiseGeneration = null;
         }
@@ -1283,7 +1290,7 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
             isError: false,
             ...(structuredReply
               ? { details: structuredReply.value !== undefined ? { structuredReply: structuredReply.value } : { structuredReplyParseError: structuredReply.error } }
-              : {}),
+              : NO_DETAILS),
           };
         } catch (error) {
           if (replyPromise && questionId) {
@@ -1416,6 +1423,7 @@ Usage:
             return {
               content: [{ type: "text", text: `${currentSection}\n\n${otherSection}` }],
               isError: false,
+              ...NO_DETAILS,
             };
           } catch (error) {
             return {
@@ -1453,6 +1461,7 @@ Usage:
                 return {
                   content: [{ type: "text", text: "Message cancelled by user" }],
                   isError: false,
+                  ...NO_DETAILS,
                 };
               }
             }
@@ -1575,6 +1584,7 @@ Usage:
             return {
               content: [{ type: "text", text: `**Reply from ${to}:**\n${replyText}${replyAttachments}` }],
               isError: false,
+              ...NO_DETAILS,
             };
           } catch (error) {
             if (replyPromise && sendTo && questionId) {
@@ -1652,6 +1662,7 @@ Usage:
             return {
               content: [{ type: "text", text: "No unresolved inbound asks." }],
               isError: false,
+              ...NO_DETAILS,
             };
           }
 
@@ -1664,6 +1675,7 @@ Usage:
           return {
             content: [{ type: "text", text: `**Pending asks:**\n${lines.join("\n")}` }],
             isError: false,
+            ...NO_DETAILS,
           };
         }
 
@@ -1677,6 +1689,7 @@ Usage:
                 text: `**Intercom Status:**\nConnected: Yes\nSession ID: ${mySessionId}\nActive sessions: ${sessions.length}`,
               }],
               isError: false,
+              ...NO_DETAILS,
             };
           } catch (error) {
             return {

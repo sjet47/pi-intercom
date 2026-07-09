@@ -1212,8 +1212,9 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
 
 
         let replyPromise: Promise<Message> | null = null;
+        let questionId: string | null = null;
         try {
-          const questionId = randomUUID();
+          questionId = randomUUID();
           replyPromise = waitForReply(sendTo, questionId, signal);
           replyPromise.catch(() => undefined);
           if (signal?.aborted) {
@@ -1285,7 +1286,9 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
               : {}),
           };
         } catch (error) {
-          rejectReplyWaiter(sendTo, questionId, toError(error));
+          if (replyPromise && questionId) {
+            rejectReplyWaiter(sendTo, questionId, toError(error));
+          }
           if (replyPromise) {
             try {
               await replyPromise;

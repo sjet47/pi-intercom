@@ -69,8 +69,10 @@ intercom({
 Before sending, verify who's connected:
 
 ```typescript
+// Lists peers in the current cwd by default, with live lifecycle status.
 intercom({ action: "list" })
-// → Shows all connected sessions with names, cwd, models, and live status (`idle`, `thinking`, `tool:<name>`)
+// Set list_all to inspect every connected cwd; results are grouped by cwd.
+intercom({ action: "list", list_all: true })
 ```
 
 ### Pattern 3: Reply Naturally
@@ -200,7 +202,7 @@ it as a `contact_supervisor` escalation.
 | `ask` | Blocks until reply (10 min timeout) | You need an answer to continue |
 | `reply` | Responds to the active or pending inbound ask | You were asked something and need to answer naturally |
 | `pending` | Lists unresolved inbound asks | You need to see who is waiting before replying |
-| `list` | Returns all sessions with live status | You need to discover targets or choose an idle peer |
+| `list` | Lists current-cwd sessions by default; `list_all: true` groups every connected cwd | You need to discover targets or choose an idle peer |
 | `status` | Returns your connection state | Troubleshooting |
 
 ## Optional: Visible Peer Sessions via cmux or tmux

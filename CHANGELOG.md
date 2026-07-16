@@ -4,6 +4,9 @@ All notable changes to the `pi-intercom` extension will be documented in this fi
 
 ## [Unreleased]
 
+### Added
+- Added `list_all` to `intercom({ action: "list" })`: lists now default to the current cwd and group all-session results by cwd when requested.
+
 ## [0.6.0] - 2026-05-03
 
 ### Added

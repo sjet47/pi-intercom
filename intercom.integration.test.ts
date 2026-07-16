@@ -396,6 +396,46 @@ test("sessions publish automatic lifecycle status", { concurrency: false }, asyn
   }
 });
 
+test("intercom list defaults to the current cwd and groups all sessions by cwd", { concurrency: false }, async () => {
+  const { default: piIntercomExtension } = await import("./index.ts");
+  const { cleanup } = await setupClients();
+  const foreignCwd = path.join(tmpdir(), "pi-intercom-other-project");
+  const foreignClient = new IntercomClient();
+  const harness = createExtensionHarness("list-worker", { hasUI: true });
+
+  try {
+    await foreignClient.connect({
+      name: "foreign-worker",
+      cwd: foreignCwd,
+      model: "test-model",
+      pid: process.pid,
+      startedAt: Date.now(),
+      lastActivity: Date.now(),
+    });
+    piIntercomExtension(harness.pi as never);
+    await harness.emitLifecycle("session_start");
+    await waitForSessionByName(foreignClient, "list-worker");
+
+    const intercomTool = harness.tools.find((tool) => tool.name === "intercom")!;
+    const defaultResult = await intercomTool.execute("list-default", { action: "list" }, new AbortController().signal, undefined, harness.ctx);
+    const defaultText = defaultResult.content[0]?.text ?? "";
+    assert.match(defaultText, new RegExp(`\\*\\*${repoDir}:\\*\\*`));
+    assert.match(defaultText, /list-worker/);
+    assert.doesNotMatch(defaultText, /foreign-worker/);
+    assert.doesNotMatch(defaultText, new RegExp(foreignCwd));
+
+    const allResult = await intercomTool.execute("list-all", { action: "list", list_all: true }, new AbortController().signal, undefined, harness.ctx);
+    const allText = allResult.content[0]?.text ?? "";
+    assert.match(allText, /foreign-worker/);
+    assert.match(allText, new RegExp(`\\*\\*${foreignCwd}:\\*\\*`));
+    assert.ok(allText.indexOf(`**${repoDir}:**`) < allText.indexOf(`**${foreignCwd}:**`));
+  } finally {
+    await harness.emitLifecycle("session_shutdown");
+    await foreignClient.disconnect().catch(() => undefined);
+    await cleanup();
+  }
+});
+
 test("busy interactive sessions idle-gate top-level asks without aborting", { concurrency: false }, async () => {
   const { default: piIntercomExtension } = await import("./index.ts");
   const { planner, cleanup } = await setupClients();

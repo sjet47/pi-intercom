@@ -396,12 +396,30 @@ function formatSessionLabel(session: SessionInfo, duplicates: Set<string>): stri
     ? `${session.name} (${shortSessionId(session.id)})`
     : session.name;
 }
-function formatSessionListRow(session: SessionInfo, currentCwd: string, isSelf: boolean): string {
+function formatSessionListRow(session: SessionInfo, isSelf: boolean): string {
   const name = session.name || "Unnamed session";
-  const tags = [isSelf ? "self" : session.cwd === currentCwd ? "same cwd" : undefined, session.status]
+  const tags = [isSelf ? "self" : undefined, session.status]
     .filter((tag): tag is string => Boolean(tag));
   const suffix = tags.length ? ` [${tags.join(", ")}]` : "";
-  return `• ${name} (${shortSessionId(session.id)}) — ${session.cwd} (${session.model})${suffix}`;
+  return `• ${name} (${shortSessionId(session.id)}) (${session.model})${suffix}`;
+}
+
+function formatSessionGroups(sessions: SessionInfo[], currentCwd: string, currentSessionId: string): string {
+  const sessionsByCwd = new Map<string, SessionInfo[]>();
+  for (const session of sessions) {
+    const group = sessionsByCwd.get(session.cwd) ?? [];
+    group.push(session);
+    sessionsByCwd.set(session.cwd, group);
+  }
+
+  return [...sessionsByCwd.entries()]
+    .sort(([left], [right]) => {
+      if (left === currentCwd) return -1;
+      if (right === currentCwd) return 1;
+      return left.localeCompare(right);
+    })
+    .map(([cwd, group]) => `**${cwd}:**\n${group.map(session => formatSessionListRow(session, session.id === currentSessionId)).join("\n")}`)
+    .join("\n\n");
 }
 function previewText(value: unknown, maxLength = 72): string | undefined {
   if (typeof value !== "string") {
@@ -1381,6 +1399,9 @@ Usage:
       replyTo: Type.Optional(Type.String({
         description: "Message ID to reply to (for threading or responding to an 'ask')",
       })),
+      list_all: Type.Optional(Type.Boolean({
+        description: "For 'list': include sessions from every working directory (default: false)",
+      })),
     }),
 
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -1397,7 +1418,7 @@ Usage:
 
       syncPresenceIdentity(ctx.sessionManager.getSessionId());
 
-      const { action, to, message, attachments, replyTo } = params;
+      const { action, to, message, attachments, replyTo, list_all: listAll = false } = params;
 
       switch (action) {
         case "list": {
@@ -1405,7 +1426,6 @@ Usage:
             const mySessionId = connectedClient.sessionId;
             const sessions = await connectedClient.listSessions();
             const currentSession = sessions.find(s => s.id === mySessionId);
-            const otherSessions = sessions.filter(s => s.id !== mySessionId);
 
             if (!currentSession) {
               return {
@@ -1415,13 +1435,15 @@ Usage:
               };
             }
 
-            const currentSection = `**Current session:**\n${formatSessionListRow(currentSession, currentSession.cwd, true)}`;
-            const otherSection = otherSessions.length === 0
-              ? "**Other sessions:**\nNo other sessions connected."
-              : `**Other sessions:**\n${otherSessions.map(s => formatSessionListRow(s, currentSession.cwd, false)).join("\n")}`;
+            const visibleSessions = listAll
+              ? sessions
+              : sessions.filter(session => session.cwd === currentSession.cwd);
+            const sessionList = visibleSessions.length === 0
+              ? "No sessions connected."
+              : formatSessionGroups(visibleSessions, currentSession.cwd, currentSession.id);
 
             return {
-              content: [{ type: "text", text: `${currentSection}\n\n${otherSection}` }],
+              content: [{ type: "text", text: sessionList }],
               isError: false,
               ...NO_DETAILS,
             };

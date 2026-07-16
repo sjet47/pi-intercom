@@ -73,12 +73,13 @@ Press **Alt+M** or type `/intercom` to open the session list overlay:
 The agent can list sessions and send messages using the `intercom` tool. Tool calls and results render as compact transcript rows so send/ask/reply flows are easy to scan. For common patterns like planner-worker delegation, the bundled `pi-intercom` skill provides copy-paste ready examples:
 
 ```typescript
-// List active sessions
+// List sessions in the current working directory
 intercom({ action: "list" })
-// → **Current session:**
-// → • executor (20d43841) — ~/projects/api (claude-sonnet-4) [self, idle]
-// → **Other sessions:**
-// → • research (6332faab) — ~/projects/api (claude-sonnet-4) [same cwd, thinking]
+// → **~/projects/api:**
+// → • executor (20d43841) (claude-sonnet-4) [self, idle]
+// → • research (6332faab) (claude-sonnet-4) [thinking]
+// List every connected session, grouped by working directory
+intercom({ action: "list", list_all: true })
 
 // Send a message
 intercom({ action: "send", to: "research", message: "Check if UserService.validate() handles null" })
@@ -317,6 +318,7 @@ The supervisor can reply with plain JSON or a fenced `json` block. If the reply 
 | `message` | string | Message text (for send/ask/reply) |
 | `attachments` | array | Optional `file`, `snippet`, or `context` attachments |
 | `replyTo` | string | Optional message ID for threading or replying to an `ask` |
+| `list_all` | boolean | For `list`, include every connected cwd and group results by cwd (default: `false`) |
 
 ### contact_supervisor
 
@@ -336,7 +338,7 @@ Only registered in sessions where `pi-subagents` supplied the required child bri
 
 ### intercom actions
 
-**`list`** — Returns the current session plus other active intercom-connected sessions with name, short ID, working directory, model, and live status. Status is derived automatically from Pi lifecycle events: `idle`, `thinking`, or `tool:<name>`.
+**`list`** — By default returns active intercom-connected sessions in the current working directory. Pass `list_all: true` to include every connected session; results are grouped by cwd and include each session's name, short ID, model, and live status. Status is derived automatically from Pi lifecycle events: `idle`, `thinking`, or `tool:<name>`.
 
 **`send`** — Sends a message to the specified session. By default it sends immediately, including in interactive sessions. Set `confirmSend: true` in config if you want a confirmation dialog for non-reply sends. Replies that include `replyTo` skip confirmation. Returns delivery confirmation.
 

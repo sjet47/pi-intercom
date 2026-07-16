@@ -1,7 +1,7 @@
 # HANDOFF
 
 ### TL;DR
-cwd 分组（`88d70ff`）与 session `working`/`idle` 展示均已实现、全量验证通过。
+`intercom list` 的当前 cwd 分组标题现在显示 `[current]`；类型检查和 57 项测试均已通过。
 
 ### 全局事实
 - Presence 保留并发布 `idle`、`thinking`、`tool:<name>` 等细粒度生命周期状态；list 只将其显示归一化。

@@ -75,7 +75,7 @@ The agent can list sessions and send messages using the `intercom` tool. Tool ca
 ```typescript
 // List sessions in the current working directory
 intercom({ action: "list" })
-// → **~/projects/api:**
+// → **~/projects/api [current]:**
 // → • executor [idle] (20d43841) (claude-sonnet-4) [self]
 // → • research [working] (6332faab) (claude-sonnet-4)
 // List every connected session, grouped by working directory

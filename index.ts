@@ -420,7 +420,7 @@ function formatSessionGroups(sessions: SessionInfo[], currentCwd: string, curren
       if (right === currentCwd) return 1;
       return left.localeCompare(right);
     })
-    .map(([cwd, group]) => `**${cwd}:**\n${group.map(session => formatSessionListRow(session, session.id === currentSessionId)).join("\n")}`)
+    .map(([cwd, group]) => `**${cwd}${cwd === currentCwd ? " [current]" : ""}:**\n${group.map(session => formatSessionListRow(session, session.id === currentSessionId)).join("\n")}`)
     .join("\n\n");
 }
 function previewText(value: unknown, maxLength = 72): string | undefined {

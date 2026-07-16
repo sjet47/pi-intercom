@@ -419,7 +419,7 @@ test("intercom list defaults to the current cwd and groups all sessions by cwd",
     const intercomTool = harness.tools.find((tool) => tool.name === "intercom")!;
     const defaultResult = await intercomTool.execute("list-default", { action: "list" }, new AbortController().signal, undefined, harness.ctx);
     const defaultText = defaultResult.content[0]?.text ?? "";
-    assert.match(defaultText, new RegExp(`\\*\\*${repoDir}:\\*\\*`));
+    assert.match(defaultText, new RegExp(`\\*\\*${repoDir} \\[current\\]:\\*\\*`));
     assert.match(defaultText, /list-worker/);
     assert.doesNotMatch(defaultText, /foreign-worker/);
     assert.doesNotMatch(defaultText, new RegExp(foreignCwd));
@@ -428,7 +428,8 @@ test("intercom list defaults to the current cwd and groups all sessions by cwd",
     const allText = allResult.content[0]?.text ?? "";
     assert.match(allText, /foreign-worker/);
     assert.match(allText, new RegExp(`\\*\\*${foreignCwd}:\\*\\*`));
-    assert.ok(allText.indexOf(`**${repoDir}:**`) < allText.indexOf(`**${foreignCwd}:**`));
+    assert.doesNotMatch(allText, new RegExp(`\\*\\*${foreignCwd} \\[current\\]:\\*\\*`));
+    assert.ok(allText.indexOf(`**${repoDir} [current]:**`) < allText.indexOf(`**${foreignCwd}:**`));
   } finally {
     await harness.emitLifecycle("session_shutdown");
     await foreignClient.disconnect().catch(() => undefined);

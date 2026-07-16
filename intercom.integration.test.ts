@@ -436,6 +436,42 @@ test("intercom list defaults to the current cwd and groups all sessions by cwd",
   }
 });
 
+test("intercom list shows normalized working and idle states", { concurrency: false }, async () => {
+  const { default: piIntercomExtension } = await import("./index.ts");
+  const { planner, cleanup } = await setupClients();
+  const harness = createExtensionHarness("list-status-worker", { hasUI: true });
+  const annotatedIdleClient = new IntercomClient();
+
+  try {
+    await annotatedIdleClient.connect({
+      name: "annotated-idle-worker",
+      cwd: repoDir,
+      model: "test-model",
+      pid: process.pid,
+      startedAt: Date.now(),
+      lastActivity: Date.now(),
+      status: "idle · review",
+    });
+    piIntercomExtension(harness.pi as never);
+    await harness.emitLifecycle("session_start");
+    await waitForSessionStatus(planner, "list-status-worker", "idle");
+
+    const intercomTool = harness.tools.find((tool) => tool.name === "intercom")!;
+    const idleResult = await intercomTool.execute("list-idle", { action: "list" }, new AbortController().signal, undefined, harness.ctx);
+    assert.match(idleResult.content[0]?.text ?? "", /list-status-worker \[idle\]/);
+    assert.match(idleResult.content[0]?.text ?? "", /annotated-idle-worker \[idle\]/);
+
+    await harness.emitLifecycle("agent_start");
+    await waitForSessionStatus(planner, "list-status-worker", "thinking");
+    const workingResult = await intercomTool.execute("list-working", { action: "list" }, new AbortController().signal, undefined, harness.ctx);
+    assert.match(workingResult.content[0]?.text ?? "", /list-status-worker \[working\]/);
+  } finally {
+    await harness.emitLifecycle("session_shutdown");
+    await annotatedIdleClient.disconnect().catch(() => undefined);
+    await cleanup();
+  }
+});
+
 test("busy interactive sessions idle-gate top-level asks without aborting", { concurrency: false }, async () => {
   const { default: piIntercomExtension } = await import("./index.ts");
   const { planner, cleanup } = await setupClients();

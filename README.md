@@ -76,8 +76,8 @@ The agent can list sessions and send messages using the `intercom` tool. Tool ca
 // List sessions in the current working directory
 intercom({ action: "list" })
 // → **~/projects/api:**
-// → • executor (20d43841) (claude-sonnet-4) [self, idle]
-// → • research (6332faab) (claude-sonnet-4) [thinking]
+// → • executor [idle] (20d43841) (claude-sonnet-4) [self]
+// → • research [working] (6332faab) (claude-sonnet-4)
 // List every connected session, grouped by working directory
 intercom({ action: "list", list_all: true })
 
@@ -338,7 +338,7 @@ Only registered in sessions where `pi-subagents` supplied the required child bri
 
 ### intercom actions
 
-**`list`** — By default returns active intercom-connected sessions in the current working directory. Pass `list_all: true` to include every connected session; results are grouped by cwd and include each session's name, short ID, model, and live status. Status is derived automatically from Pi lifecycle events: `idle`, `thinking`, or `tool:<name>`.
+**`list`** — By default returns active intercom-connected sessions in the current working directory. Pass `list_all: true` to include every connected session; results are grouped by cwd and include each session's name, `working`/`idle` state, short ID, and model. The state is `idle` only when the published lifecycle status is `idle`; all other lifecycle states render as `working`.
 
 **`send`** — Sends a message to the specified session. By default it sends immediately, including in interactive sessions. Set `confirmSend: true` in config if you want a confirmation dialog for non-reply sends. Replies that include `replyTo` skip confirmation. Returns delivery confirmation.
 

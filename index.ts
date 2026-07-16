@@ -396,12 +396,14 @@ function formatSessionLabel(session: SessionInfo, duplicates: Set<string>): stri
     ? `${session.name} (${shortSessionId(session.id)})`
     : session.name;
 }
+function formatSessionWorkState(session: SessionInfo): "working" | "idle" {
+  return session.status?.startsWith("idle") ? "idle" : "working";
+}
+
 function formatSessionListRow(session: SessionInfo, isSelf: boolean): string {
   const name = session.name || "Unnamed session";
-  const tags = [isSelf ? "self" : undefined, session.status]
-    .filter((tag): tag is string => Boolean(tag));
-  const suffix = tags.length ? ` [${tags.join(", ")}]` : "";
-  return `• ${name} (${shortSessionId(session.id)}) (${session.model})${suffix}`;
+  const suffix = isSelf ? " [self]" : "";
+  return `• ${name} [${formatSessionWorkState(session)}] (${shortSessionId(session.id)}) (${session.model})${suffix}`;
 }
 
 function formatSessionGroups(sessions: SessionInfo[], currentCwd: string, currentSessionId: string): string {

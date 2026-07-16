@@ -69,7 +69,7 @@ intercom({
 Before sending, verify who's connected:
 
 ```typescript
-// Lists peers in the current cwd by default, with live lifecycle status.
+// Lists peers in the current cwd by default, with working/idle status.
 intercom({ action: "list" })
 // Set list_all to inspect every connected cwd; results are grouped by cwd.
 intercom({ action: "list", list_all: true })

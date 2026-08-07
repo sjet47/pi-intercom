@@ -2,7 +2,7 @@
 
 All notable changes to the `pi-intercom` extension will be documented in this file.
 
-## [Unreleased]
+## [0.6.1] - 2026-08-07
 
 ### Added
 - Added `#alias` input completion: typing `#` in the editor suggests connected sessions' `/name`; the `intercom` tool targets use plain session name/ID.

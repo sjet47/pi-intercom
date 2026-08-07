@@ -49,14 +49,14 @@ After the first merge, later upstream merges have a shared merge base and become
 
 ## Backport Guidance
 
-For now, prefer upstream commits that fix compatibility, correctness, or robustness without adding fixed context cost:
+The `v0.6.2` fork already includes these upstream improvements:
 
 - Pi runtime compatibility and `tool_result` error handling
-- Broker spawn hardening (`getTsxCliPath`, current Node executable)
+- Broker spawn hardening (`getTsxCliPath`, current Node executable, standalone Pi fallback)
 - Configurable ask timeout
-- Stable intercom IDs and `/intercom-id` only if the feature is needed
+- Stable intercom IDs and `/intercom-id`
 
-Avoid taking delivery metadata, `cancel`/`supersede`, `list-cwd`/context presence, or the extension bus unless a real need appears; those add fixed tool schema or per-message context overhead.
+For future upstream releases, prefer similar fixes that improve compatibility, correctness, or robustness without adding fixed context cost. Avoid taking delivery metadata, `cancel`/`supersede`, `list-cwd`/context presence, or the extension bus unless a real need appears; those add fixed tool schema or per-message context overhead.
 
 ## Verification
 

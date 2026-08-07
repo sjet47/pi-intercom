@@ -1,6 +1,6 @@
 {
   "name": "pi-intercom",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "license": "MIT",
   "type": "module",
   "main": "index.ts",
@@ -20,7 +20,7 @@
   ],
   "scripts": {
     "check": "tsc --noEmit",
-    "test": "tsx --test alias.test.ts broker/paths.test.ts broker/spawn.test.ts broker/framing.test.ts broker/broker-startup.test.ts broker/guest.test.ts reply-tracker.test.ts intercom.integration.test.ts test/inline-message.test.ts"
+    "test": "tsx --test alias.test.ts config.test.ts broker/paths.test.ts broker/spawn.test.ts broker/framing.test.ts broker/broker-startup.test.ts broker/guest.test.ts reply-tracker.test.ts intercom.integration.test.ts test/inline-message.test.ts"
   },
   "keywords": [
     "pi-package"

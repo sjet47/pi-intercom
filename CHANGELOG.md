@@ -2,6 +2,14 @@
 
 All notable changes to the `pi-intercom` extension will be documented in this file.
 
+## [0.6.2] - 2026-08-07
+
+### Added
+- Backported Pi runtime compatibility: `StringEnum` tool schemas, `tool_result` error handling, and subagent event unsubscription.
+- Backported broker spawn hardening: resolves the bundled `tsx` CLI via module resolution and starts the default broker with the current Node executable, falling back to `node` on PATH for standalone Pi executables.
+- Added configurable ask timeout via `PI_INTERCOM_ASK_TIMEOUT_MS`.
+- Added restart-stable intercom IDs via `PI_INTERCOM_STABLE_ID` / `stableId` and `/intercom-id` to insert a handoff target.
+
 ## [0.6.1] - 2026-08-07
 
 ### Added

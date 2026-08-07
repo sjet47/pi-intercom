@@ -2,6 +2,21 @@ import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 
+export const DEFAULT_ASK_TIMEOUT_MS = 10 * 60 * 1000;
+
+export function getAskTimeoutMs(): number {
+  const raw = process.env.PI_INTERCOM_ASK_TIMEOUT_MS;
+  if (raw === undefined || raw.trim() === "") {
+    return DEFAULT_ASK_TIMEOUT_MS;
+  }
+
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error("PI_INTERCOM_ASK_TIMEOUT_MS must be a positive integer number of milliseconds");
+  }
+  return value;
+}
+
 export interface IntercomConfig {
   /** Broker command used to spawn the broker process (e.g. "npx" or "bun") */
   brokerCommand: string;
@@ -14,6 +29,9 @@ export interface IntercomConfig {
 
   /** Optional custom status suffix shown after automatic lifecycle status */
   status?: string;
+
+  /** Optional stable intercom session ID for restart-stable addressing */
+  stableId?: string;
   
   /** Enable/disable intercom (default: true) */
   enabled: boolean;
@@ -98,6 +116,17 @@ export function loadConfig(): IntercomConfig {
         throw new Error(`"status" must be a string`);
       }
       config.status = parsedConfig.status;
+    }
+
+    if (Object.hasOwn(parsedConfig, "stableId")) {
+      if (typeof parsedConfig.stableId !== "string") {
+        throw new Error(`"stableId" must be a string`);
+      }
+      const stableId = parsedConfig.stableId.trim();
+      if (!stableId) {
+        throw new Error(`"stableId" must not be empty`);
+      }
+      config.stableId = stableId;
     }
 
     return config;

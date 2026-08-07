@@ -265,6 +265,49 @@ test("guest clients are invisible to sessions and can send/receive replies", { s
   }
 });
 
+test("register accepts a stable sessionId and replaces a previous connection", { skip: isWindows }, async () => {
+  const homeDir = mkdtempSync(path.join(tmpdir(), "pi-intercom-stable-"));
+  mkdirSync(path.join(homeDir, ".pi/agent/intercom"), { recursive: true });
+  const socketPath = getBrokerSocketPath(process.platform, homeDir);
+
+  const broker = spawnBroker(homeDir);
+  const streams = collectStream(broker);
+  const sockets: net.Socket[] = [];
+  try {
+    await waitForStdoutLine(streams, broker, "Intercom broker started");
+
+    const first = await connectClient(socketPath);
+    sockets.push(first.socket);
+    writeMessage(first.socket, { type: "register", session: registration({ name: "worker" }), sessionId: "stable-worker" });
+    const firstRegistered = await first.next();
+    assert.equal(firstRegistered.type, "registered");
+    assert.equal(firstRegistered.sessionId, "stable-worker");
+
+    first.socket.destroy();
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    const second = await connectClient(socketPath);
+    sockets.push(second.socket);
+    writeMessage(second.socket, { type: "register", session: registration({ name: "worker" }), sessionId: "stable-worker" });
+    const secondRegistered = await second.next();
+    assert.equal(secondRegistered.type, "registered");
+    assert.equal(secondRegistered.sessionId, "stable-worker");
+
+    writeMessage(second.socket, { type: "list", requestId: "stable-list" });
+    const listed = await second.next();
+    assert.equal(listed.type, "sessions");
+    const ids = (listed.sessions as AnyRecord[]).map(s => s.id);
+    assert.deepEqual(ids.filter(id => id === "stable-worker"), ["stable-worker"]);
+  } finally {
+    for (const socket of sockets) {
+      socket.destroy();
+    }
+    broker.kill("SIGTERM");
+    await waitForExit(broker).catch(() => null);
+    rmSync(homeDir, { recursive: true, force: true });
+  }
+});
+
 test("cli list, send, and ask work end-to-end against a live broker", { skip: isWindows }, async () => {
   const homeDir = mkdtempSync(path.join(tmpdir(), "pi-intercom-cli-"));
   mkdirSync(path.join(homeDir, ".pi/agent/intercom"), { recursive: true });

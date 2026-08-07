@@ -12,9 +12,11 @@ import {
   getWindowsHiddenLauncherPath,
 } from "./spawn.js";
 
-test("getTsxCliPath points at local tsx cli", () => {
+test("getTsxCliPath resolves tsx cli via module resolution", () => {
   const cliPath = getTsxCliPath("C:/repo");
-  assert.equal(cliPath, path.join("C:/repo", "node_modules", "tsx", "dist", "cli.mjs"));
+  assert.equal(path.basename(cliPath), "cli.mjs");
+  assert.equal(path.basename(path.dirname(cliPath)), "dist");
+  assert.equal(path.basename(path.dirname(path.dirname(cliPath))), "tsx");
 });
 
 test("getWindowsHiddenLauncherPath points at the broker launcher script", () => {
@@ -22,15 +24,16 @@ test("getWindowsHiddenLauncherPath points at the broker launcher script", () => 
   assert.equal(launcherPath, path.join("C:/tmp/intercom", "broker-launch.vbs"));
 });
 
-test("getWindowsBrokerCommandLine wraps node, tsx cli, and broker path", () => {
+test("getWindowsBrokerCommandLine wraps node, resolved tsx cli, and broker path", () => {
   const commandLine = getWindowsBrokerCommandLine(
     "C:/repo/broker.ts",
     "C:/repo",
     "C:/Program Files/nodejs/node.exe",
   );
+  const expectedTsxPath = getTsxCliPath("C:/repo");
   assert.equal(
     commandLine,
-    `"C:/Program Files/nodejs/node.exe" "${path.join("C:/repo", "node_modules", "tsx", "dist", "cli.mjs")}" "C:/repo/broker.ts"`,
+    `"C:/Program Files/nodejs/node.exe" "${expectedTsxPath}" "C:/repo/broker.ts"`,
   );
 });
 
@@ -56,8 +59,29 @@ test("getBrokerLaunchSpec uses wscript launcher on Windows without writing files
     assert.equal(spec.command, "wscript.exe");
     assert.deepEqual(spec.args, [path.join(intercomDir, "broker-launch.vbs")]);
     assert.equal(spec.kind, "windows-launcher");
-    assert.equal(spec.launcherCommandLine, `"C:/Program Files/nodejs/node.exe" "${path.join("C:/repo", "node_modules", "tsx", "dist", "cli.mjs")}" "C:/repo/broker.ts"`);
+    const expectedTsxPath = getTsxCliPath("C:/repo");
+    assert.equal(spec.launcherCommandLine, `"C:/Program Files/nodejs/node.exe" "${expectedTsxPath}" "C:/repo/broker.ts"`);
     assert.equal(existsSync(path.join(intercomDir, "broker-launch.vbs")), false);
+  } finally {
+    rmSync(intercomDir, { recursive: true, force: true });
+  }
+});
+
+test("getBrokerLaunchSpec falls back to PATH node for a standalone Pi executable on Windows", () => {
+  const intercomDir = mkdtempSync(path.join(tmpdir(), "pi-intercom-"));
+
+  try {
+    const spec = getBrokerLaunchSpec(
+      "C:/repo/broker.ts",
+      "npx",
+      ["--no-install", "tsx"],
+      "C:/repo",
+      "win32",
+      intercomDir,
+      "C:/Program Files/Pi/pi.exe",
+    );
+    assert.equal(spec.kind, "windows-launcher");
+    assert.equal(spec.launcherCommandLine, `"node" "${getTsxCliPath("C:/repo")}" "C:/repo/broker.ts"`);
   } finally {
     rmSync(intercomDir, { recursive: true, force: true });
   }
@@ -76,13 +100,30 @@ test("getBrokerLaunchSpec uses custom broker command on Windows", () => {
   }
 });
 
-test("getBrokerLaunchSpec uses npx + tsx on non-Windows", () => {
+test("getBrokerLaunchSpec uses node + resolved tsx for the default non-Windows launcher", () => {
   const spec = getBrokerLaunchSpec("C:/repo/broker.ts", "npx", ["--no-install", "tsx"], "C:/repo", "linux", "/tmp/intercom", "/usr/bin/node");
-  assert.equal(spec.command, "npx");
+  assert.equal(spec.command, "/usr/bin/node");
   assert.deepEqual(spec.args, [
-    "--no-install",
-    "tsx",
+    getTsxCliPath("C:/repo"),
     "C:/repo/broker.ts",
+  ]);
+  assert.equal(spec.kind, "direct");
+});
+
+test("getBrokerLaunchSpec falls back to PATH node for a standalone Pi executable on non-Windows", () => {
+  const spec = getBrokerLaunchSpec(
+    "/repo/broker.ts",
+    "npx",
+    ["--no-install", "tsx"],
+    "/repo",
+    "darwin",
+    "/tmp/intercom",
+    "/Applications/Pi.app/Contents/MacOS/pi",
+  );
+  assert.equal(spec.command, "node");
+  assert.deepEqual(spec.args, [
+    getTsxCliPath("/repo"),
+    "/repo/broker.ts",
   ]);
   assert.equal(spec.kind, "direct");
 });

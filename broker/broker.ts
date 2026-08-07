@@ -109,6 +109,10 @@ function isMessage(value: unknown): value is Message {
     || (Array.isArray(content.attachments) && content.attachments.every(isAttachment));
 }
 
+function isSessionId(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
 function isSessionRegistration(value: unknown): value is Omit<SessionInfo, "id"> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return false;
@@ -229,8 +233,27 @@ class IntercomBroker {
         if (currentId) {
           throw new Error("Received duplicate register message");
         }
-        
-        const id = randomUUID();
+
+        let id: string = randomUUID();
+        if (clientMessage.sessionId !== undefined) {
+          if (!isSessionId(clientMessage.sessionId)) {
+            throw new Error("Invalid register sessionId");
+          }
+          id = clientMessage.sessionId;
+        }
+
+        const previousGuest = this.guests.get(id);
+        if (previousGuest) {
+          previousGuest.socket.end();
+          this.guests.delete(id);
+        }
+        const previousSession = this.sessions.get(id);
+        if (previousSession) {
+          previousSession.socket.end();
+          this.sessions.delete(id);
+          this.broadcast({ type: "session_left", sessionId: id }, id);
+        }
+
         setId(id);
         const info: SessionInfo = { ...clientMessage.session, id };
         const isGuest = clientMessage.guest === true;

@@ -28,7 +28,7 @@ export interface Attachment {
 }
 
 export type ClientMessage =
-  | { type: "register"; session: Omit<SessionInfo, "id">; guest?: boolean }
+  | { type: "register"; session: Omit<SessionInfo, "id">; sessionId?: string; guest?: boolean }
   | { type: "unregister" }
   | { type: "list"; requestId: string }
   | { type: "send"; to: string; message: Message }

@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { homedir } from "os";
+import { createRequire } from "module";
 import { getBrokerSocketPath } from "./paths.js";
 import { checkSocketConnectable } from "./socket-check.js";
 
@@ -31,7 +32,14 @@ function sleep(ms: number): Promise<void> {
 }
 
 export function getTsxCliPath(extensionDir: string = EXTENSION_DIR): string {
-  return join(extensionDir, "node_modules", "tsx", "dist", "cli.mjs");
+  // Resolve tsx via Node's module resolution so hoisted workspace installs work.
+  try {
+    const requireFromExtension = createRequire(import.meta.url);
+    const tsxMain = requireFromExtension.resolve("tsx");
+    return join(dirname(tsxMain), "cli.mjs");
+  } catch {
+    return join(extensionDir, "node_modules", "tsx", "dist", "cli.mjs");
+  }
 }
 
 function quoteWindowsArg(value: string): string {
@@ -49,6 +57,13 @@ function usesDefaultBrokerCommand(brokerCommand: string, brokerArgs: string[]): 
     && brokerArgs[1] === "tsx";
 }
 
+function getNodeCommand(nodePath: string): string {
+  const executableName = nodePath.split(/[\\/]/).pop();
+  return executableName && /^node(?:js)?(?:\.exe)?$/i.test(executableName)
+    ? nodePath
+    : "node";
+}
+
 export function getWindowsBrokerCommandLine(
   brokerPath: string,
   extensionDir: string = EXTENSION_DIR,
@@ -57,7 +72,7 @@ export function getWindowsBrokerCommandLine(
   brokerArgs: string[] = ["--no-install", "tsx"],
 ): string {
   if (usesDefaultBrokerCommand(brokerCommand, brokerArgs)) {
-    return [quoteWindowsArg(nodePath), quoteWindowsArg(getTsxCliPath(extensionDir)), quoteWindowsArg(brokerPath)].join(" ");
+    return [quoteWindowsArg(getNodeCommand(nodePath)), quoteWindowsArg(getTsxCliPath(extensionDir)), quoteWindowsArg(brokerPath)].join(" ");
   }
 
   return [quoteWindowsArg(brokerCommand), ...brokerArgs.map(quoteWindowsArg), quoteWindowsArg(brokerPath)].join(" ");
@@ -98,6 +113,14 @@ export function getBrokerLaunchSpec(
       args: [launcherPath],
       launcherPath,
       launcherCommandLine: getWindowsBrokerCommandLine(brokerPath, extensionDir, nodePath, brokerCommand, brokerArgs),
+    };
+  }
+
+  if (usesDefaultBrokerCommand(brokerCommand, brokerArgs)) {
+    return {
+      kind: "direct",
+      command: getNodeCommand(nodePath),
+      args: [getTsxCliPath(extensionDir), brokerPath],
     };
   }
 

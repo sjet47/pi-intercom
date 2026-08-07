@@ -1,7 +1,15 @@
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { randomUUID } from "crypto";
 import { Type } from "typebox";
-import { Text } from "@mariozechner/pi-tui";
+import {
+  type AutocompleteItem,
+  type AutocompleteProvider,
+  Text,
+} from "@earendil-works/pi-tui";
+import {
+  referencedSessionAliases,
+  sessionAlias,
+} from "./alias.ts";
 import { IntercomClient } from "./broker/client.ts";
 import { spawnBrokerIfNeeded } from "./broker/spawn.ts";
 import { SessionListOverlay } from "./ui/session-list.ts";
@@ -24,6 +32,8 @@ const SUBAGENT_CHILD_INDEX_ENV = "PI_SUBAGENT_CHILD_INDEX";
 const SUBAGENT_INTERCOM_SESSION_NAME_ENV = "PI_SUBAGENT_INTERCOM_SESSION_NAME";
 const INTERCOM_SESSION_NAME_ENV = "PI_INTERCOM_NAME";
 const PI_SESSION_NAME_ENV = "PI_SESSION_NAME";
+const SESSION_AUTOCOMPLETE_RE = /(?:^|[ \t])(#[^\n#]*)$/;
+const MAX_SESSION_AUTOCOMPLETE_ITEMS = 20;
 
 // Type-only marker for tool results that intentionally omit `details` at runtime.
 // ToolDefinition's AgentToolResult requires the `details` key at the type level, but
@@ -436,6 +446,61 @@ function previewText(value: unknown, maxLength = 72): string | undefined {
 function firstTextContent(result: { content?: Array<{ type: string; text?: string }> }): string {
   return result.content?.find((item) => item.type === "text" && typeof item.text === "string")?.text?.replace(/\*\*/g, "") ?? "";
 }
+function sessionAutocompleteItems(aliases: string[], query: string): AutocompleteItem[] {
+  const lowerQuery = query.toLowerCase();
+  const seen = new Set<string>();
+  const items: AutocompleteItem[] = [];
+
+  for (const alias of aliases) {
+    const lowerAlias = alias.toLowerCase();
+    if (seen.has(lowerAlias) || !lowerAlias.startsWith(lowerQuery)) continue;
+    seen.add(lowerAlias);
+    items.push({
+      value: `#${alias}`,
+      label: `#${alias}`,
+      description: "Intercom session alias",
+    });
+    if (items.length === MAX_SESSION_AUTOCOMPLETE_ITEMS) break;
+  }
+
+  return items;
+}
+
+export function createSessionAutocompleteProvider(
+  current: AutocompleteProvider,
+  getAliases: () => ReadonlySet<string>,
+): AutocompleteProvider {
+  return {
+    triggerCharacters: ["#"],
+
+    async getSuggestions(lines, cursorLine, cursorCol, options) {
+      const beforeCursor = (lines[cursorLine] ?? "").slice(0, cursorCol);
+      if ((lines[0] ?? "").trimStart().startsWith("/")) {
+        return current.getSuggestions(lines, cursorLine, cursorCol, options);
+      }
+
+      const prefix = beforeCursor.match(SESSION_AUTOCOMPLETE_RE)?.[1];
+      if (!prefix) {
+        return current.getSuggestions(lines, cursorLine, cursorCol, options);
+      }
+
+      const items = sessionAutocompleteItems([...getAliases()], prefix.slice(1));
+      if (items.length === 0) {
+        return current.getSuggestions(lines, cursorLine, cursorCol, options);
+      }
+
+      return { prefix, items };
+    },
+
+    applyCompletion(lines, cursorLine, cursorCol, item, prefix) {
+      return current.applyCompletion(lines, cursorLine, cursorCol, item, prefix);
+    },
+
+    shouldTriggerFileCompletion(lines, cursorLine, cursorCol) {
+      return current.shouldTriggerFileCompletion?.(lines, cursorLine, cursorCol) ?? true;
+    },
+  };
+}
 export default function piIntercomExtension(pi: ExtensionAPI) {
   let client: IntercomClient | null = null;
   const config: IntercomConfig = loadConfig();
@@ -453,6 +518,8 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
   let runtimeStarted = false;
   let runtimeGeneration = 0;
   let agentRunning = false;
+  let sessionCache = new Map<string, SessionInfo>();
+  let sessionAliasSet = new Set<string>();
   const activeTools = new Map<string, string>();
   const replyTracker = new ReplyTracker();
   const pendingIdleMessages: InboundMessageEntry[] = [];
@@ -530,6 +597,24 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
     }
     clearTimeout(inboundFlushTimer);
     inboundFlushTimer = null;
+  }
+  function rebuildSessionAliases(): void {
+    sessionAliasSet = new Set([...sessionCache.values()].map(sessionAlias));
+  }
+  function replaceSessionCache(sessions: SessionInfo[]): void {
+    sessionCache = new Map(sessions.map((session) => [session.id, session]));
+    rebuildSessionAliases();
+  }
+  function upsertSessionCache(session: SessionInfo): void {
+    sessionCache.set(session.id, session);
+    rebuildSessionAliases();
+  }
+  function removeSessionCache(sessionId: string): void {
+    sessionCache.delete(sessionId);
+    rebuildSessionAliases();
+  }
+  function getSessionAliases(): ReadonlySet<string> {
+    return sessionAliasSet;
   }
   function getLiveContext(ctx: ExtensionContext | null = runtimeContext, generation = runtimeGeneration): ExtensionContext | null {
     if (disposed || shuttingDown || generation !== runtimeGeneration || !ctx) {
@@ -743,6 +828,21 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
       }
       handleIncomingMessage(liveContext, from, message);
     });
+    nextClient.on("session_joined", (session) => {
+      if (client === nextClient) {
+        upsertSessionCache(session);
+      }
+    });
+    nextClient.on("session_left", (sessionId) => {
+      if (client === nextClient) {
+        removeSessionCache(sessionId);
+      }
+    });
+    nextClient.on("presence_update", (session) => {
+      if (client === nextClient) {
+        upsertSessionCache(session);
+      }
+    });
     nextClient.on("disconnected", (error: Error) => {
       if (client !== nextClient) {
         return;
@@ -805,6 +905,11 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
           throw new Error("Intercom runtime no longer active");
         }
         client = nextClient;
+        try {
+          replaceSessionCache(await nextClient.listSessions());
+        } catch {
+          // The cache is still populated by session_joined/presence_update events.
+        }
         reconnectAttempt = 0;
         return nextClient;
       } catch (error) {
@@ -952,6 +1057,19 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
       acknowledge: true,
     });
   });
+  pi.on("input", (event) => {
+    if (event.source === "extension") return { action: "continue" };
+    if (event.text.trimStart().startsWith("/")) return { action: "continue" };
+
+    const aliases = referencedSessionAliases(event.text, getSessionAliases());
+    if (aliases.length === 0) return { action: "continue" };
+
+    const target = aliases[0]!;
+    return {
+      action: "transform",
+      text: `${event.text}\n\n<pi_intercom> use tool \`intercom\` with target as \"${target}\" </pi_intercom>`,
+    };
+  });
   pi.on("session_start", (_event, ctx) => {
     if (!config.enabled) {
       return;
@@ -969,6 +1087,13 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
     sessionStartedAt = Date.now();
     agentRunning = false;
     activeTools.clear();
+    sessionCache.clear();
+    sessionAliasSet.clear();
+    if (ctx.hasUI && typeof ctx.ui?.addAutocompleteProvider === "function") {
+      ctx.ui.addAutocompleteProvider((current) =>
+        createSessionAutocompleteProvider(current, getSessionAliases),
+      );
+    }
     const startupIntercomName = process.env[INTERCOM_SESSION_NAME_ENV]?.trim() || process.env[PI_SESSION_NAME_ENV]?.trim();
     if (startupIntercomName) {
       pi.setSessionName(startupIntercomName);
@@ -988,7 +1113,21 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
       });
     }, 0);
   });
-  
+
+  // session_info_changed was added in pi 0.80.3; the repo's pinned pi-coding-agent type is older.
+  const piWithSessionInfoEvent = pi as ExtensionAPI & {
+    on(
+      event: "session_info_changed",
+      handler: (event: { type: "session_info_changed"; name: string | undefined }, ctx: ExtensionContext) => void,
+    ): void;
+  };
+  piWithSessionInfoEvent.on("session_info_changed", (_event, ctx) => {
+    if (!config.enabled || !getLiveContext(ctx)) {
+      return;
+    }
+    currentSessionId = ctx.sessionManager.getSessionId();
+    syncPresenceIdentity(currentSessionId);
+  });
   pi.on("session_shutdown", async () => {
     shuttingDown = true;
     disposed = true;
@@ -1001,6 +1140,8 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
     clearInboundFlushTimer();
     agentRunning = false;
     activeTools.clear();
+    sessionCache.clear();
+    sessionAliasSet.clear();
     if (client) {
       await client.disconnect();
       client = null;
@@ -1068,25 +1209,6 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
       });
     }
   });
-
-
-  pi.registerCommand("intercom-name", {
-    description: "Set the pi session name and immediately sync pi-intercom presence (usage: /intercom-name <name>)",
-    handler: async (args, ctx) => {
-      const name = args.trim();
-      if (!name) {
-        const current = pi.getSessionName();
-        ctx.ui.notify(current ? `Intercom session name: ${current}` : "Usage: /intercom-name <name>", "info");
-        return;
-      }
-
-      pi.setSessionName(name);
-      currentSessionId = ctx.sessionManager.getSessionId();
-      syncPresenceIdentity(currentSessionId);
-      ctx.ui.notify(`Intercom session name synced: ${name}`, "info");
-    },
-  });
-
 
   pi.registerMessageRenderer("intercom_message", (message, _options, theme) => {
     const details = message.details as { from: SessionInfo; message: Message; replyCommand?: string; bodyText?: string } | undefined;
@@ -1374,8 +1496,8 @@ Use this to communicate findings, request help, or coordinate work with other se
 
 Usage:
   intercom({ action: "list" })                    → List active sessions
-  intercom({ action: "send", to: "session-name", message: "..." })  → Send message
-  intercom({ action: "ask", to: "session-name", message: "..." })   → Ask and wait for reply
+  intercom({ action: "send", to: "worker", message: "..." })  → Send message
+  intercom({ action: "ask", to: "worker", message: "..." })   → Ask and wait for reply
   intercom({ action: "reply", message: "..." })                      → Reply to the active/single pending ask
   intercom({ action: "pending" })                                      → List unresolved inbound asks
   intercom({ action: "status" })                  → Show connection status`,
@@ -1836,7 +1958,6 @@ Usage:
       notifyIfLive(ctx, `Message sent to ${targetLabel}`, "info", overlayGeneration);
     }
   }
-
   pi.registerCommand("intercom", {
     description: "Open session intercom overlay",
     handler: async (_args, ctx) => openIntercomOverlay(ctx),

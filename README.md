@@ -565,6 +565,33 @@ Supported `config.json` keys include `stableId` for restart-stable addressing, `
 
 **`ask` stays client-side.** The broker still routes plain messages; it does not have a special request/response mode for `ask`. The client waits for a matching reply before it triggers a new turn, then returns that reply as the tool result. Reply hints make that flow practical by showing the recipient the exact `send` call to use. Separately, `list` / `sessions` now carry a `requestId` so a delayed session-list reply cannot be mistaken for a newer one.
 
+## Anomaly CLI
+
+The package also ships a hidden `pi-intercom` binary for scripted one-way sends and blocking asks. `send` connects as a hidden session named `noreply`; `ask` connects as a hidden session named `anomaly`. No `list` result ever shows `noreply`, `anomaly`, or any other hidden client. The broker rejects direct sends from ordinary sessions to hidden clients, so a CLI `send` appears as `From noreply` with no reply path, while a CLI `ask` appears as `From anomaly` and creates a normal pending ask that the receiving session can answer with `intercom({ action: "reply", ... })`.
+
+```sh
+pi-intercom list
+pi-intercom send <target> <message>
+pi-intercom ask <target> <message>
+```
+
+To install the CLI from this repository:
+
+```sh
+npm install -g /home/sjet/repo/pi-intercom
+```
+
+Or link the local package for development:
+
+```sh
+cd /home/sjet/repo/pi-intercom
+npm link
+```
+
+If you are using a published release instead, the package name is also `pi-intercom`, so `npm install -g pi-intercom` exposes the same `pi-intercom` command.
+
+`list` shows ordinary intercom sessions only; hidden clients such as `noreply` and `anomaly` are never listed, but they can still `send`/`ask` to listed sessions and remain valid reply targets for pending asks. `send` returns immediately after delivery. `ask` sends a blocking request and waits for the reply; it exits immediately only when delivery is rejected (for example the target is disconnected or does not exist). Set `PI_INTERCOM_ASK_TIMEOUT_MS` to change the ask timeout from the default of 10 minutes. If the CLI exits before an ask is answered, the existing named-session mailbox can queue the reply for a later `anomaly` process with the same working directory.
+
 ## pi-intercom vs pi-messenger
 
 | Aspect | pi-intercom | pi-messenger |
@@ -585,7 +612,10 @@ Use pi-messenger for multi-agent swarms working on a shared task. Use pi-interco
 ├── index.ts              # Extension entry point
 ├── types.ts              # SessionInfo, Message, protocol types
 ├── config.ts             # Config loading
+├── cli.ts                # Hidden anomaly CLI
 ├── project-agent.ts      # Herdr project-pane launch and cwd target resolution
+├── bin/
+│   └── pi-intercom.mjs # Installed binary wrapper
 ├── broker/
 │   ├── broker.ts         # Broker process
 │   ├── client.ts         # IntercomClient class
@@ -608,5 +638,5 @@ Use pi-messenger for multi-agent swarms working on a shared task. Use pi-interco
 - **Same machine only** — Uses local sockets/pipes, no network support
 - **No dedicated intercom log** — Messages are kept in Pi session history, but there is no separate intercom transcript or inbox
 - **No attachments UI** — `file`, `snippet`, and `context` attachments are supported in the protocol, but not in the compose overlay
-- **Only connected sessions appear** — The list shows Pi sessions that have loaded `pi-intercom` and successfully registered with the broker, not every open Pi process on the machine
+- **Only connected sessions appear** — The list shows Pi sessions that have loaded `pi-intercom` and successfully registered with the broker, not every open Pi process on the machine. Hidden `noreply` / `anomaly` CLI clients are intentionally excluded from all session lists.
 - **Broker lifecycle** — The broker auto-spawns on first use and exits when idle; sessions reconnect automatically if the broker restarts

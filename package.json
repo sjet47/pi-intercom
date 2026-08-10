@@ -4,6 +4,9 @@
   "license": "MIT",
   "type": "module",
   "main": "index.ts",
+  "bin": {
+    "pi-intercom": "./bin/pi-intercom.mjs"
+  },
   "files": [
     "index.ts",
     "types.ts",
@@ -13,11 +16,14 @@
     "format-context.ts",
     "project-agent.ts",
     "reply-tracker.ts",
+    "cli.ts",
     "broker/**/*.ts",
+    "bin/**/*.mjs",
     "ui/**/*.ts",
     "skills/**/*"
   ],
   "scripts": {
+    "cli": "tsx cli.ts",
     "test": "tsx --test broker/client.test.ts broker/client-liveness.test.ts broker/extension.test.ts broker/framing.test.ts broker/paths.test.ts broker/runtime-claim.test.ts broker/spawn.test.ts config.test.ts cwd.test.ts format-context.test.ts project-agent.test.ts reply-tracker.test.ts intercom.integration.test.ts test/inline-message.test.ts test/overlay-width.test.ts"
   },
   "keywords": [

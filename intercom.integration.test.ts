@@ -3400,6 +3400,148 @@ test("broker rejects blocking asks to disconnected targets", { concurrency: fals
   }
 });
 
+test("hidden anomaly client sees ordinary sessions but never hidden sessions", { concurrency: false }, async () => {
+  const { planner, orchestrator, cleanup } = await setupClients();
+  const cli = new IntercomClient();
+
+  try {
+    await cli.connect({
+      name: "anomaly",
+      cwd: repoDir,
+      model: "intercom-cli",
+      pid: process.pid,
+      startedAt: Date.now(),
+      lastActivity: Date.now(),
+      hidden: true,
+    });
+
+    const ordinarySessions = await planner.listSessions();
+    assert.equal(ordinarySessions.some((session) => session.id === cli.sessionId), false);
+    assert.equal(ordinarySessions.some((session) => session.id === orchestrator.sessionId), true);
+
+    const cliSessions = await cli.listSessions();
+    assert.equal(cliSessions.some((session) => session.id === cli.sessionId), false);
+    assert.equal(cliSessions.some((session) => session.hidden), false);
+    assert.equal(cliSessions.some((session) => session.id === planner.sessionId), true);
+    assert.equal(cliSessions.some((session) => session.id === orchestrator.sessionId), true);
+  } finally {
+    await cli.disconnect().catch(() => undefined);
+    await cleanup();
+  }
+});
+
+test("hidden anomaly send arrives as anomaly and cannot be answered directly", { concurrency: false }, async () => {
+  const { planner, orchestrator, cleanup } = await setupClients();
+  const cli = new IntercomClient();
+
+  try {
+    await cli.connect({
+      name: "anomaly",
+      cwd: repoDir,
+      model: "intercom-cli",
+      pid: process.pid,
+      startedAt: Date.now(),
+      lastActivity: Date.now(),
+      hidden: true,
+    });
+
+    const cliSessions = await cli.listSessions();
+    const target = cliSessions.find((session) => session.id === orchestrator.sessionId);
+    assert.ok(target);
+    const received = once(orchestrator, "message") as Promise<[SessionInfo, Message]>;
+    const sendResult = await cli.send(target!.id, { text: "One-way anomaly message" });
+    assert.equal(sendResult.delivered, true);
+    const [from, message] = await received;
+    assert.equal(from.name, "anomaly");
+    assert.equal(from.hidden, true);
+    assert.equal(message.content.text, "One-way anomaly message");
+    assert.equal(message.expectsReply, undefined);
+
+    const directReply = await orchestrator.send(cli.sessionId!, { text: "Try to reply directly" });
+    assert.equal(directReply.delivered, false);
+    assert.match(directReply.reason ?? "", /hidden session cannot be contacted directly/i);
+  } finally {
+    await cli.disconnect().catch(() => undefined);
+    await cleanup();
+  }
+});
+
+test("hidden anomaly ask can be answered through the pending reply flow", { concurrency: false }, async () => {
+  const { planner, orchestrator, cleanup } = await setupClients();
+  const cli = new IntercomClient();
+
+  try {
+    await cli.connect({
+      name: "anomaly",
+      cwd: repoDir,
+      model: "intercom-cli",
+      pid: process.pid,
+      startedAt: Date.now(),
+      lastActivity: Date.now(),
+      hidden: true,
+    });
+
+    const askId = "hidden-anomaly-ask";
+    const cliSessions = await cli.listSessions();
+    const target = cliSessions.find((session) => session.id === orchestrator.sessionId);
+    assert.ok(target);
+    const receivedAsk = once(orchestrator, "message") as Promise<[SessionInfo, Message]>;
+    const replyReceived = waitForReply(cli, askId);
+    const sendResult = await cli.send(target!.id, {
+      messageId: askId,
+      text: "Can anomaly ask?",
+      expectsReply: true,
+    });
+    assert.equal(sendResult.delivered, true);
+    const [from, askMessage] = await receivedAsk;
+    assert.equal(from.name, "anomaly");
+    assert.equal(askMessage.expectsReply, true);
+
+    const reply = await orchestrator.send(cli.sessionId!, {
+      text: "Yes, ask is replyable.",
+      replyTo: askId,
+    });
+    assert.equal(reply.delivered, true);
+    const replyMessage = (await replyReceived).message;
+    assert.equal(replyMessage.replyTo, askId);
+    assert.equal(replyMessage.content.text, "Yes, ask is replyable.");
+  } finally {
+    await cli.disconnect().catch(() => undefined);
+    await cleanup();
+  }
+});
+
+test("hidden anomaly blocking ask fails immediately when target is disconnected", { concurrency: false }, async () => {
+  const { planner, cleanup } = await setupClients();
+  const cli = new IntercomClient();
+
+  try {
+    await cli.connect({
+      name: "anomaly",
+      cwd: repoDir,
+      model: "intercom-cli",
+      pid: process.pid,
+      startedAt: Date.now(),
+      lastActivity: Date.now(),
+      hidden: true,
+    });
+    const disconnectedId = planner.sessionId!;
+    await planner.disconnect();
+
+    const result = await cli.send(disconnectedId, {
+      messageId: "hidden-anomaly-offline-ask",
+      text: "Do not queue this blocking ask.",
+      expectsReply: true,
+    });
+    assert.equal(result.delivered, false);
+    assert.match(result.reason ?? "", /not currently connected/);
+    assert.match(result.reason ?? "", /not queued/);
+  } finally {
+    await cli.disconnect().catch(() => undefined);
+    await cleanup();
+  }
+});
+
 test("broker never remaps a disconnected mailbox back to the sending session", { concurrency: false }, async () => {
   const { planner, orchestrator, cleanup } = await setupClients();
   const sender = new IntercomClient();

@@ -10,10 +10,22 @@ test("broker startup refuses to replace a live broker PID", () => {
   const pidPath = path.join(directory, "broker.pid");
   try {
     writeFileSync(pidPath, `${process.pid}\n`);
+    const processMarker = path.basename(process.execPath);
     assert.throws(
-      () => assertNoLiveBroker(pidPath),
+      () => assertNoLiveBroker(pidPath, processMarker),
       new RegExp(`Refusing to replace live intercom broker process ${process.pid}`),
     );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("broker startup tolerates a PID reused by an unrelated live process", { skip: process.platform !== "linux" }, () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "pi-intercom-runtime-"));
+  const pidPath = path.join(directory, "broker.pid");
+  try {
+    writeFileSync(pidPath, `${process.pid}\n`);
+    assert.doesNotThrow(() => assertNoLiveBroker(pidPath, "pi-intercom-unrelated-process-marker"));
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

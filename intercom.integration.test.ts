@@ -1855,6 +1855,67 @@ test("obsolete toolVisibility config never hides or reveals the intercom tool", 
   });
 });
 
+test("inline #session mention transforms a submitted prompt into an intercom instruction", { concurrency: false }, async () => {
+  const { default: piIntercomExtension } = await import("./index.ts");
+  const { planner, cleanup } = await setupClients();
+  const harness = createExtensionHarness("inline-session-worker", {
+    hasUI: true,
+    activeTools: ["read"],
+  });
+
+  try {
+    piIntercomExtension(harness.pi as never);
+    await harness.emitLifecycle("session_start");
+    await waitForSessionByName(planner, "inline-session-worker");
+
+    const results = await harness.emitLifecycleResults("input", {
+      text: "Ask #planner for a status update.",
+      source: "interactive",
+    });
+    const transformed = results.find(
+      (result): result is { action: "transform"; text: string } =>
+        Boolean(result) && typeof result === "object" && (result as { action?: string }).action === "transform" && typeof (result as { text?: unknown }).text === "string",
+    );
+    assert.ok(transformed);
+    assert.match(transformed!.text, /Use the intercom tool to communicate with Pi session "planner" \(ID: .*\)/);
+    assert.match(transformed!.text, /<pi-intercom>/);
+    assert.match(transformed!.text, /<\/pi-intercom>/);
+    assert.equal(transformed!.text.startsWith("Ask #planner for a status update."), true);
+  } finally {
+    await harness.emitLifecycle("session_shutdown");
+    await cleanup();
+  }
+});
+
+test("inline #session mention leaves unrelated input untouched", { concurrency: false }, async () => {
+  const { default: piIntercomExtension } = await import("./index.ts");
+  const { planner, cleanup } = await setupClients();
+  const harness = createExtensionHarness("inline-session-bystander", { hasUI: true });
+
+  try {
+    piIntercomExtension(harness.pi as never);
+    await harness.emitLifecycle("session_start");
+    await waitForSessionByName(planner, "inline-session-bystander");
+
+    const cases = [
+      { text: "No mention here.", source: "interactive" },
+      { text: "Ask #planner for a status update.", source: "extension" },
+      { text: "/skill:pi-intercom #planner", source: "interactive" },
+      { text: "Ask #nobody-here for a status update.", source: "interactive" },
+    ];
+    for (const input of cases) {
+      const results = await harness.emitLifecycleResults("input", input);
+      const transforms = results.filter(
+        (result) => typeof result === "object" && result !== null && (result as { action?: string }).action === "transform",
+      );
+      assert.deepEqual(transforms, [], `expected no transform for ${JSON.stringify(input)}`);
+    }
+  } finally {
+    await harness.emitLifecycle("session_shutdown");
+    await cleanup();
+  }
+});
+
 test("contact supervisor tool renders reason and reply state", async () => {
   const { default: piIntercomExtension } = await import("./index.ts");
 

@@ -2,7 +2,7 @@ import { defineTool, type ExtensionAPI, type ExtensionContext } from "@earendil-
 import { StringEnum } from "@earendil-works/pi-ai";
 import { randomUUID } from "crypto";
 import { Type } from "typebox";
-import { Text } from "@earendil-works/pi-tui";
+import { Text, type AutocompleteProvider } from "@earendil-works/pi-tui";
 import { IntercomClient, type SendResult } from "./broker/client.ts";
 import { spawnBrokerIfNeeded } from "./broker/spawn.ts";
 import { SessionListOverlay } from "./ui/session-list.ts";
@@ -11,6 +11,7 @@ import { InlineMessageComponent } from "./ui/inline-message.ts";
 import { getAskTimeoutMs, loadConfig, type IntercomConfig } from "./config.ts";
 import { EXTENSION_BUS_FEATURE } from "./types.ts";
 import type { Attachment, BrokerMessage, Message, MessageControl, MessageReceiptStatus, SessionInfo, SessionRegistration } from "./types.ts";
+import { createIntercomSessionAutocompleteProvider, transformIntercomSessionInput } from "./inline-session.ts";
 import {
   INTERCOM_EXTENSION_REGISTER_EVENT,
   INTERCOM_EXTENSION_REGISTRY_READY_EVENT,
@@ -607,6 +608,9 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
   let runtimeGeneration = 0;
   let agentRunning = false;
   const activeTools = new Map<string, string>();
+  const INTERCOM_SESSION_CACHE_TTL_MS = 2000;
+  let intercomSessionCache: SessionInfo[] | null = null;
+  let intercomSessionCacheAt = 0;
   const replyTracker = new ReplyTracker();
 
   const seenInboundMessages = new Map<string, number>();
@@ -1273,6 +1277,7 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
       if (client !== nextClient) return;
       switch (message.type) {
         case "registered": {
+          invalidateIntercomSessionCache();
           const supported = message.features?.includes(EXTENSION_BUS_FEATURE) ?? false;
           if (supported && localExtensions.size > 0) {
             nextClient.updateExtensionCapabilities(currentExtensionCapabilities());
@@ -1330,11 +1335,13 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
           handleMessageControl(message.control);
           break;
         case "session_joined":
+          invalidateIntercomSessionCache();
           for (const namespace of localExtensions.keys()) {
             emitLocalExtensionEvent(namespace, { type: "session_joined", session: message.session });
           }
           break;
         case "session_left":
+          invalidateIntercomSessionCache();
           for (const namespace of localExtensions.keys()) {
             emitLocalExtensionEvent(namespace, { type: "session_left", sessionId: message.sessionId });
           }
@@ -1389,7 +1396,7 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
       });
     }, getReconnectDelayMs());
   }
-  async function ensureConnected(reason: "startup" | "background" | "tool" | "overlay"): Promise<IntercomClient> {
+  async function ensureConnected(reason: "startup" | "background" | "tool" | "overlay" | "autocomplete"): Promise<IntercomClient> {
     if (!config.enabled) {
       throw new Error("Intercom disabled");
     }
@@ -1440,6 +1447,28 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
     reconnectPromise = nextReconnectPromise;
     reconnectPromiseGeneration = generationAtStart;
     return nextReconnectPromise;
+  }
+  function invalidateIntercomSessionCache(): void {
+    intercomSessionCache = null;
+    intercomSessionCacheAt = 0;
+  }
+  async function getVisibleIntercomSessions(): Promise<SessionInfo[]> {
+    const now = Date.now();
+    if (intercomSessionCache && now - intercomSessionCacheAt < INTERCOM_SESSION_CACHE_TTL_MS) {
+      return intercomSessionCache;
+    }
+    try {
+      const activeClient = await ensureConnected("autocomplete");
+      const sessions = await activeClient.listSessions();
+      const currentSessionId = activeClient.sessionId;
+      intercomSessionCache = currentSessionId
+        ? sessions.filter((session) => session.id !== currentSessionId)
+        : sessions;
+      intercomSessionCacheAt = Date.now();
+      return intercomSessionCache;
+    } catch {
+      return [];
+    }
   }
   async function resolveSessionTarget(activeClient: IntercomClient, nameOrId: string): Promise<string | null> {
     const sessions = await activeClient.listSessions();
@@ -1551,6 +1580,7 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
     });
   }
   function startSessionRuntime(ctx: ExtensionContext): void {
+    invalidateIntercomSessionCache();
     const previousClient = client;
     failPendingOutboxRequests(runtimeGeneration, "session_ended", "Session replaced");
     shuttingDown = false;
@@ -1697,9 +1727,14 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
       return;
     }
     startSessionRuntime(ctx);
+    const ui = ctx.ui as { addAutocompleteProvider?: (factory: (current: AutocompleteProvider) => AutocompleteProvider) => void } | undefined;
+    if (ctx.hasUI && ui && typeof ui.addAutocompleteProvider === "function") {
+      ui.addAutocompleteProvider((current) => createIntercomSessionAutocompleteProvider(current, getVisibleIntercomSessions));
+    }
   });
   
   pi.on("session_shutdown", async () => {
+    invalidateIntercomSessionCache();
     unsubscribeExtensionRegister();
     unsubscribeSubagentControlIntercom();
     unsubscribeSubagentResultIntercom();
@@ -1795,6 +1830,16 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
     const details = message.details as { from: SessionInfo; message: Message; replyCommand?: string; bodyText?: string } | undefined;
     if (!details) return undefined;
     return new InlineMessageComponent(details.from, details.message, theme, details.replyCommand, details.bodyText, !options.expanded);
+  });
+
+  pi.on("input", async (event) => {
+    if (event.source === "extension") return { action: "continue" };
+    if (!event.text.includes("#")) return { action: "continue" };
+    if (event.text.trimStart().startsWith("/")) return { action: "continue" };
+    const sessions = await getVisibleIntercomSessions();
+    const transformed = transformIntercomSessionInput(event.text, sessions);
+    if (!transformed) return { action: "continue" };
+    return { action: "transform", text: transformed };
   });
 
   pi.on("tool_result", (event) => {

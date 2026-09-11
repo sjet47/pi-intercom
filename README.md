@@ -128,6 +128,16 @@ intercom({
 })
 ```
 
+### Inline Session Mentions
+
+In the TUI input box, type `#` to autocomplete connected intercom sessions. A mention can use a session name or a session ID prefix, for example `#planner` or `#8f3d2a11`, and it can appear anywhere in the prompt.
+
+```
+Ask #planner for a status update.
+```
+
+When a submitted prompt contains a known `#session` mention, pi-intercom appends a short `<pi-intercom>...</pi-intercom>` block telling the model to use the `intercom` tool for that session. Duplicate session names fall back to session IDs in autocomplete and resolution.
+
 ### Receiving Messages
 
 When a message arrives, it appears inline in your chat with the sender's info and a reply hint:

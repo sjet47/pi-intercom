@@ -6,7 +6,7 @@ All notable changes to the `pi-intercom` extension will be documented in this fi
 
 ### Added
 - Added a hidden `pi-intercom` binary that sends as `noreply`, asks as `anomaly`, is excluded from every session list, supports `list`/`send`/`ask`, and keeps CLI asks replyable through the normal pending-reply flow.
-- Added `#session` mentions in the TUI input box: `#` autocompletes connected intercom sessions wherever it appears in the prompt, and a submitted prompt containing a known mention gets a `<pi-intercom>...</pi-intercom>` intercom-tool instruction.
+- Added `#session` mentions in the TUI input box: `#` autocompletes connected intercom sessions wherever it appears in the prompt, and a submitted prompt containing a known mention gets a `<pi-intercom>...</pi-intercom>` intercom-tool instruction. Trailing sentence punctuation such as the period in `Ask #planner.` is tolerated.
 
 ### Fixed
 - Broker startup no longer refuses to start when a stale PID file points at a PID that an unrelated live process has reused on Linux.

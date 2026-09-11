@@ -65,6 +65,17 @@ test("resolveSessionAliasesInText ignores unknown aliases and de-duplicates repe
   assert.equal(resolveSessionAliasesInText("# Heading", sessions), null);
 });
 
+test("resolveSessionAliasesInText tolerates trailing sentence punctuation", () => {
+  for (const text of ["Ask #planner.", "Ask #planner, please.", "Ask #planner: now", "Ask #planner- now"]) {
+    const aliases = resolveSessionAliasesInText(text, sessions);
+    assert.ok(aliases, `expected ${text} to resolve`);
+    assert.equal(aliases![0]!.session.id, "session-planner-0001");
+  }
+
+  assert.equal(transformIntercomSessionInput("Ask #planner.", sessions)?.startsWith("Ask #planner.\n"), true);
+  assert.equal(resolveSessionAliasesInText("Use #missing.", sessions), null);
+});
+
 test("transformIntercomSessionInput appends an intercom instruction for known sessions", () => {
   const transformed = transformIntercomSessionInput("Ask #planner for a status update.", sessions);
   assert.ok(transformed);
@@ -116,6 +127,21 @@ test("autocomplete provider suggests sessions after # and delegates otherwise", 
 
   const delegated = await provider.getSuggestions(["Ask planner"], 0, 11, { signal: new AbortController().signal, force: false });
   assert.equal(delegated, null);
+});
+
+test("autocomplete provider triggers wherever # appears in the prompt", async () => {
+  const current = fakeCurrentProvider();
+  const provider = createIntercomSessionAutocompleteProvider(current, async () => sessions);
+
+  const afterWord = await provider.getSuggestions(["Ask planner about#wor"], 0, 21, { signal: new AbortController().signal, force: false });
+  assert.ok(afterWord);
+  assert.equal(afterWord!.prefix, "#wor");
+  assert.deepEqual(afterWord!.items.map((item) => item.value), ["#session-worker-0002", "#session-worker-0003"]);
+
+  const midSentence = await provider.getSuggestions(["Ask #plan for a status"], 0, 9, { signal: new AbortController().signal, force: false });
+  assert.ok(midSentence);
+  assert.equal(midSentence!.prefix, "#plan");
+  assert.deepEqual(midSentence!.items.map((item) => item.value), ["#planner"]);
 });
 
 test("autocomplete provider leaves slash commands and stops after a completed alias", async () => {

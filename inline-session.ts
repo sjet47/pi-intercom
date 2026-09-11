@@ -6,8 +6,8 @@ const SESSION_ALIAS_RE = new RegExp(
   `#([${SESSION_ALIAS_CHARS}]+)(?![${SESSION_ALIAS_CHARS}])`,
   "gu",
 );
-const SESSION_AUTOCOMPLETE_RE = /(?:^|[ \t])(#[\p{L}\p{N}_.:-]*)$/u;
-const SESSION_AUTOCOMPLETE_STOP_RE = /(?:^|[ \t])#[\p{L}\p{N}_.:-]*[ \t]$/u;
+const SESSION_AUTOCOMPLETE_RE = /(#[\p{L}\p{N}_.:-]*)$/u;
+const SESSION_AUTOCOMPLETE_STOP_RE = /#[\p{L}\p{N}_.:-]*[ \t]$/u;
 const MAX_AUTOCOMPLETE_ITEMS = 20;
 
 export interface ResolvedSessionAlias {
@@ -90,6 +90,18 @@ export function resolveSessionAlias(
   return byIdPrefix.length === 1 ? byIdPrefix[0]! : null;
 }
 
+function resolveSessionAliasWithoutTrailingSeparators(sessions: readonly SessionInfo[], alias: string): SessionInfo | null {
+  let candidate = alias;
+  while (/[.:-]$/u.test(candidate)) {
+    candidate = candidate.slice(0, -1);
+    const resolved = resolveSessionAlias(sessions, candidate);
+    if (resolved) {
+      return resolved;
+    }
+  }
+  return null;
+}
+
 export function resolveSessionAliasesInText(
   text: string,
   sessions: readonly SessionInfo[],
@@ -101,7 +113,9 @@ export function resolveSessionAliasesInText(
   const resolved = new Map<string, ResolvedSessionAlias>();
   for (const match of text.matchAll(SESSION_ALIAS_RE)) {
     const alias = `#${match[1]!}`;
-    const session = resolveSessionAlias(sessions, alias);
+    // "Ask #planner." matches SESSION_ALIAS_RE with the sentence period attached, so
+    // retry without trailing separators before giving up on the mention.
+    const session = resolveSessionAlias(sessions, alias) ?? resolveSessionAliasWithoutTrailingSeparators(sessions, alias);
     if (!session || resolved.has(session.id)) {
       continue;
     }

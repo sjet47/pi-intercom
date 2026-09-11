@@ -136,7 +136,7 @@ In the TUI input box, type `#` to autocomplete connected intercom sessions. A me
 Ask #planner for a status update.
 ```
 
-When a submitted prompt contains a known `#session` mention, pi-intercom appends a short `<pi-intercom>...</pi-intercom>` block telling the model to use the `intercom` tool for that session. Duplicate session names fall back to session IDs in autocomplete and resolution.
+When a submitted prompt contains a known `#session` mention, pi-intercom appends a short `<pi-intercom>...</pi-intercom>` block telling the model to use the `intercom` tool for that session. A trailing `.`, `:`, or `-` is treated as sentence punctuation rather than part of the mention, so `Ask #planner.` still resolves. Duplicate session names fall back to session IDs in autocomplete and resolution.
 
 ### Receiving Messages
 

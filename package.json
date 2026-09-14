@@ -25,7 +25,7 @@
   ],
   "scripts": {
     "cli": "tsx cli.ts",
-    "test": "tsx --test broker/client.test.ts broker/client-liveness.test.ts broker/extension.test.ts broker/framing.test.ts broker/paths.test.ts broker/runtime-claim.test.ts broker/spawn.test.ts config.test.ts cwd.test.ts format-context.test.ts project-agent.test.ts reply-tracker.test.ts inline-session.test.ts intercom.integration.test.ts test/inline-message.test.ts test/overlay-width.test.ts"
+    "test": "tsx --test broker/client.test.ts broker/client-liveness.test.ts broker/extension.test.ts broker/framing.test.ts broker/paths.test.ts broker/runtime-claim.test.ts broker/spawn.test.ts cli.test.ts config.test.ts cwd.test.ts format-context.test.ts project-agent.test.ts reply-tracker.test.ts inline-session.test.ts intercom.integration.test.ts test/inline-message.test.ts test/overlay-width.test.ts"
   },
   "keywords": [
     "pi-package"

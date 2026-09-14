@@ -149,18 +149,78 @@ function resolveTarget(sessions: SessionInfo[], nameOrId: string): SessionInfo |
   return null;
 }
 
+interface InboundMailEntry {
+  from: SessionInfo;
+  message: Message;
+}
+
+export interface InboundMail {
+  /** Drop a message this command already handled, so it is not reported twice. */
+  consume(messageId: string): void;
+  /**
+   * Print messages this command did not handle. The broker takes a message out of its
+   * mailbox the moment it delivers it, so anything ignored here is lost for good.
+   */
+  report(): void;
+}
+
+/**
+ * Collect inbound messages from the moment the client registers. The broker flushes a
+ * disconnected peer's mailbox right after "registered", and those messages can be parsed
+ * before `connect()` resolves, so the listener has to be attached first.
+ */
+export function collectInboundMail(client: IntercomClient, name: string): InboundMail {
+  const received: InboundMailEntry[] = [];
+  client.on("message", (from: SessionInfo, message: Message) => {
+    received.push({ from, message });
+  });
+  return {
+    consume(messageId) {
+      const index = received.findIndex((entry) => entry.message.id === messageId);
+      if (index >= 0) {
+        received.splice(index, 1);
+      }
+    },
+    report() {
+      if (received.length === 0) {
+        return;
+      }
+      // stderr keeps stdout parseable for callers that script this command.
+      for (const { from, message } of received) {
+        const label = from.name || from.id;
+        const reply = message.replyTo ? ` (reply to ${message.replyTo})` : "";
+        console.error(`pi-intercom: from ${label}${reply}: ${message.content.text}`);
+      }
+      console.error(`pi-intercom: the ${received.length} message(s) above were waiting in the broker mailbox for \"${name}\" and are not this command's output.`);
+      received.length = 0;
+    },
+  };
+}
+
 function formatSession(session: SessionInfo): string {
   const name = session.name || session.id.slice(0, 8);
   const status = session.status ? ` [${session.status}]` : "";
   return `${name} (${session.id})${status} - ${session.cwd} [${session.model}]`;
 }
 
-async function connectCliClient(name: string): Promise<IntercomClient> {
+async function connectCliClient(name: string): Promise<{ client: IntercomClient; inbound: InboundMail }> {
   const config = loadConfig();
   await spawnBrokerIfNeeded(config.brokerCommand, config.brokerArgs);
   const client = new IntercomClient();
+  const inbound = collectInboundMail(client, name);
   await client.connect(cliSessionRegistration(name));
-  return client;
+  return { client, inbound };
+}
+
+/** Run one command against a short-lived registration, always draining inbound mail first. */
+async function withCliClient<T>(name: string, run: (client: IntercomClient, inbound: InboundMail) => Promise<T>): Promise<T> {
+  const { client, inbound } = await connectCliClient(name);
+  try {
+    return await run(client, inbound);
+  } finally {
+    inbound.report();
+    await client.disconnect().catch(() => undefined);
+  }
 }
 
 async function runList(client: IntercomClient): Promise<void> {
@@ -187,7 +247,7 @@ async function runSend(client: IntercomClient, target: string, text: string): Pr
   console.log(`Message sent to ${resolved.name || resolved.id} (${resolved.id})`);
 }
 
-async function runAsk(client: IntercomClient, target: string, text: string): Promise<void> {
+async function runAsk(client: IntercomClient, inbound: InboundMail, target: string, text: string): Promise<void> {
   const sessions = await client.listSessions();
   const resolved = resolveTarget(sessions, target);
   if (!resolved) {
@@ -209,6 +269,7 @@ async function runAsk(client: IntercomClient, target: string, text: string): Pro
       throw new Error(`Message to "${resolved.name || resolved.id}" was not delivered: ${result.reason ?? "unknown error"}`);
     }
     const reply = await waiter.promise;
+    inbound.consume(reply.id);
     console.log(reply.content.text);
   } finally {
     waiter.cancel();
@@ -232,37 +293,28 @@ async function main(): Promise<number> {
       if (rest.length > 0) {
         throw new Error("list does not accept arguments");
       }
-      const client = await connectCliClient(name);
-      try {
+      return withCliClient(name, async (client) => {
         await runList(client);
         return 0;
-      } finally {
-        await client.disconnect().catch(() => undefined);
-      }
+      });
     }
     case "send": {
       if (rest.length < 2) {
         throw new Error("send requires <target> and <message>");
       }
-      const client = await connectCliClient(name);
-      try {
+      return withCliClient(name, async (client) => {
         await runSend(client, rest[0]!, rest.slice(1).join(" "));
         return 0;
-      } finally {
-        await client.disconnect().catch(() => undefined);
-      }
+      });
     }
     case "ask": {
       if (rest.length < 2) {
         throw new Error("ask requires <target> and <message>");
       }
-      const client = await connectCliClient(name);
-      try {
-        await runAsk(client, rest[0]!, rest.slice(1).join(" "));
+      return withCliClient(name, async (client, inbound) => {
+        await runAsk(client, inbound, rest[0]!, rest.slice(1).join(" "));
         return 0;
-      } finally {
-        await client.disconnect().catch(() => undefined);
-      }
+      });
     }
     default:
       throw new Error(`Unknown command "${command}"`);

@@ -5,7 +5,7 @@ All notable changes to the `pi-intercom` extension will be documented in this fi
 ## [Unreleased]
 
 ### Added
-- Added a `pi-intercom` binary with `list`/`send`/`ask` for scripted access to the local broker. It registers as an ordinary session named `pi-intercom-cli` (`--name` to override), so it is attributed by name, appears in the roster, and its asks are answered through the normal pending-reply flow.
+- Added a `pi-intercom` binary with `list`/`send`/`ask` for scripted access to the local broker. It registers as an ordinary session named `pi-intercom-cli` (`--name` to override), so it is attributed by name, appears in the roster, and its asks are answered through the normal pending-reply flow. A run also prints any mail the broker was holding for a departed CLI process to stderr, so a reply that arrives after the asking process exited is never silently dropped.
 - Added `#session` mentions in the TUI input box: `#` autocompletes connected intercom sessions, and `/intercom-mention <name or ID>` inserts the mention plus an intercom-tool instruction into the editor, so the text the user sends is the text the model reads.
 
 ### Fixed

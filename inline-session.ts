@@ -109,6 +109,21 @@ export function formatIntercomMention(session: SessionInfo, sessions: readonly S
   return `${aliasForSession(session, sessions)} ${formatIntercomMentionInstruction(session)}`;
 }
 
+/**
+ * Resolve the argument of `/intercom-mention`. A trailing `.`, `:`, or `-` is usually
+ * sentence punctuation, but it can also be part of a real session name, so the exact
+ * argument wins and stripping is only a fallback.
+ */
+export function resolveSessionMention(sessions: readonly SessionInfo[], arg: string): SessionInfo | null {
+  const trimmed = arg.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const key = trimmed.startsWith("#") ? trimmed : `#${trimmed}`;
+  return resolveSessionAlias(sessions, key)
+    ?? resolveSessionAlias(sessions, key.replace(/[.:-]+$/u, ""));
+}
+
 export function createIntercomSessionAutocompleteProvider(
   current: AutocompleteProvider,
   getSessions: () => Promise<readonly SessionInfo[]>,

@@ -586,8 +586,10 @@ The package also ships a `pi-intercom` binary for scripted sends and blocking as
 ```sh
 pi-intercom list
 pi-intercom send <target> <message>
-pi-intercom ask <target> <message>
+pi-intercom ask <target> <message> [--name <session name>]
 ```
+
+`--name` sets the intercom name the CLI registers under, which also decides who receives mail queued for a departed CLI. It defaults to `pi-intercom-cli`.
 
 To install the CLI from this repository:
 
@@ -604,7 +606,15 @@ npm link
 
 If you are using a published release instead, the package name is also `pi-intercom`, so `npm install -g pi-intercom` exposes the same `pi-intercom` command.
 
-`list` shows the same roster every other session sees, including the CLI's own entry. `send` returns immediately after delivery. `ask` sends a blocking request and waits for the reply; it exits immediately only when delivery is rejected (for example the target is disconnected or does not exist). Set `PI_INTERCOM_ASK_TIMEOUT_MS` to change the ask timeout from the default of 10 minutes. If the CLI exits before an ask is answered, the broker's existing mailbox queues the reply and hands it to the next CLI process that registers with the same name and working directory.
+`list` shows the same roster every other session sees, including the CLI's own entry. `send` returns immediately after delivery. `ask` sends a blocking request and waits for the reply; it exits immediately only when delivery is rejected (for example the target is disconnected or does not exist). Set `PI_INTERCOM_ASK_TIMEOUT_MS` to change the ask timeout from the default of 10 minutes.
+
+If the CLI exits before an ask is answered, the broker's existing mailbox queues the reply and hands it to the next CLI process that registers with the same name and working directory. Because the broker drops a message from its mailbox as soon as it delivers it, every CLI run prints any mail it did not handle itself — to **stderr**, so `stdout` stays parseable:
+
+```
+$ pi-intercom list
+pi-intercom: from planner (reply to 9a9237d3-...): the answer is 42
+pi-intercom: the 1 message(s) above were waiting in the broker mailbox for "pi-intercom-cli" and are not this command's output.
+```
 
 ## pi-intercom vs pi-messenger
 

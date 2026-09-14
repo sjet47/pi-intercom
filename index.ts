@@ -11,7 +11,7 @@ import { InlineMessageComponent } from "./ui/inline-message.ts";
 import { getAskTimeoutMs, loadConfig, type IntercomConfig } from "./config.ts";
 import { EXTENSION_BUS_FEATURE } from "./types.ts";
 import type { Attachment, BrokerMessage, Message, MessageControl, MessageReceiptStatus, SessionInfo, SessionRegistration } from "./types.ts";
-import { createIntercomSessionAutocompleteProvider, formatIntercomMention, resolveSessionAlias } from "./inline-session.ts";
+import { createIntercomSessionAutocompleteProvider, formatIntercomMention, resolveSessionMention } from "./inline-session.ts";
 import {
   INTERCOM_EXTENSION_REGISTER_EVENT,
   INTERCOM_EXTENSION_REGISTRY_READY_EVENT,
@@ -1442,17 +1442,15 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
     reconnectPromiseGeneration = generationAtStart;
     return nextReconnectPromise;
   }
+  // Throws when the broker is unreachable: callers must be able to tell "no peers" apart
+  // from "could not ask". Only the autocomplete path degrades to an empty roster.
   async function listIntercomSessions(): Promise<SessionInfo[]> {
-    try {
-      const activeClient = await ensureConnected("tool");
-      const sessions = await activeClient.listSessions();
-      const currentSessionId = activeClient.sessionId;
-      return currentSessionId
-        ? sessions.filter((session) => session.id !== currentSessionId)
-        : sessions;
-    } catch {
-      return [];
-    }
+    const activeClient = await ensureConnected("tool");
+    const sessions = await activeClient.listSessions();
+    const currentSessionId = activeClient.sessionId;
+    return currentSessionId
+      ? sessions.filter((session) => session.id !== currentSessionId)
+      : sessions;
   }
   async function resolveSessionTarget(activeClient: IntercomClient, nameOrId: string): Promise<string | null> {
     const sessions = await activeClient.listSessions();
@@ -1714,7 +1712,15 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
     // older hosts, so probe the method like insertIntoEditor does.
     const ui = ctx.ui as { addAutocompleteProvider?: (factory: (current: AutocompleteProvider) => AutocompleteProvider) => void } | undefined;
     if (ctx.hasUI && ui && typeof ui.addAutocompleteProvider === "function") {
-      ui.addAutocompleteProvider((current) => createIntercomSessionAutocompleteProvider(current, listIntercomSessions));
+      // Suggestions are best-effort, so an unreachable broker yields an empty roster
+      // instead of surfacing an error while the user is still typing.
+      ui.addAutocompleteProvider((current) => createIntercomSessionAutocompleteProvider(current, async () => {
+        try {
+          return await listIntercomSessions();
+        } catch {
+          return [];
+        }
+      }));
     }
   });
   
@@ -2700,16 +2706,21 @@ Usage:
     const commandGeneration = runtimeGeneration;
     const liveContext = getLiveContext(ctx, commandGeneration);
     if (!liveContext) return;
-    const target = args.trim().replace(/[.:-]+$/u, "");
-    if (!target) {
+    if (!args.trim()) {
       notifyIfLive(liveContext, "Usage: /intercom-mention <session name or ID>", "warning", commandGeneration);
       return;
     }
-    const sessions = await listIntercomSessions();
+    let sessions: SessionInfo[];
+    try {
+      sessions = await listIntercomSessions();
+    } catch (error) {
+      notifyIfLive(ctx, `Intercom unavailable: ${getErrorMessage(error)}`, "error", commandGeneration);
+      return;
+    }
     if (!getLiveContext(liveContext, commandGeneration)) return;
-    const session = resolveSessionAlias(sessions, target.startsWith("#") ? target : `#${target}`);
+    const session = resolveSessionMention(sessions, args);
     if (!session) {
-      notifyIfLive(liveContext, `No connected intercom session matches "${target}".`, "warning", commandGeneration);
+      notifyIfLive(liveContext, `No connected intercom session matches "${args.trim()}".`, "warning", commandGeneration);
       return;
     }
     if (!insertIntoEditor(liveContext, formatIntercomMention(session, sessions))) {

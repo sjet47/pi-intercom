@@ -79,4 +79,13 @@ test("pid file round-trips identity and reads the legacy single-line format", ()
 
   assert.deepEqual(parseBrokerPidFile("1234\n"), { pid: 1234 });
   assert.deepEqual(parseBrokerPidFile("1234"), { pid: 1234 });
+
+  // Surrounding whitespace must not hide a live pid: an unparsable file reads as "no
+  // live broker", which would let a second broker start against the same socket.
+  for (const contents of [`\n${process.pid}\n\n`, `  ${process.pid}\n`, `\n${process.pid}`]) {
+    assert.deepEqual(parseBrokerPidFile(contents), { pid: process.pid });
+    withPidFile(contents, (pidPath) => {
+      assert.throws(() => assertNoLiveBroker(pidPath), /Refusing to replace live intercom broker process/);
+    });
+  }
 });

@@ -57,7 +57,9 @@ export function formatBrokerPidFile(identity: BrokerProcessIdentity): string {
 }
 
 export function parseBrokerPidFile(contents: string): BrokerProcessIdentity | null {
-  const [pidLine, bootIdLine, startTimeLine] = contents.split("\n");
+  // Trim first: a leading blank line must not turn a live broker's pid file into an
+  // unparsable one, which would read as "no live broker" and let a second one start.
+  const [pidLine, bootIdLine, startTimeLine] = contents.trim().split("\n");
   const pid = Number.parseInt((pidLine ?? "").trim(), 10);
   if (!Number.isSafeInteger(pid) || pid <= 0) return null;
   const bootId = bootIdLine?.trim();

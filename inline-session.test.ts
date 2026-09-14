@@ -6,6 +6,7 @@ import {
   createIntercomSessionAutocompleteProvider,
   formatIntercomMention,
   resolveSessionAlias,
+  resolveSessionMention,
   sessionAutocompleteItems,
 } from "./inline-session.ts";
 
@@ -81,6 +82,25 @@ test("formatIntercomMention names the target and the intercom call to make", () 
   const unnamed = formatIntercomMention(sessions[3]!, sessions);
   assert.match(unnamed, /^#session-unnamed-0004 /);
   assert.match(unnamed, /communicate with Pi session \(ID: session-unnamed-0004\)/);
+});
+
+test("resolveSessionMention prefers the exact argument over stripping punctuation", () => {
+  const hyphenated = [
+    session({ id: "session-worker-a", name: "worker-" }),
+    session({ id: "session-worker-b", name: "worker" }),
+  ];
+
+  // "worker-" is a real name here, so stripping it to "worker" would target the wrong peer.
+  assert.equal(resolveSessionMention(hyphenated, "worker-")?.id, "session-worker-a");
+  assert.equal(resolveSessionMention(hyphenated, "#worker-")?.id, "session-worker-a");
+  assert.equal(resolveSessionMention(hyphenated, "worker")?.id, "session-worker-b");
+
+  // With no such name, sentence punctuation is tolerated as intended.
+  assert.equal(resolveSessionMention(sessions, "planner.")?.id, "session-planner-0001");
+  assert.equal(resolveSessionMention(sessions, "planner: now"), null);
+  assert.equal(resolveSessionMention(sessions, "  "), null);
+  assert.equal(resolveSessionMention(sessions, "#"), null);
+  assert.equal(resolveSessionMention(sessions, "missing"), null);
 });
 
 function fakeCurrentProvider(): AutocompleteProvider {

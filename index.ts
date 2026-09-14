@@ -11,7 +11,7 @@ import { InlineMessageComponent } from "./ui/inline-message.ts";
 import { getAskTimeoutMs, loadConfig, type IntercomConfig } from "./config.ts";
 import { EXTENSION_BUS_FEATURE } from "./types.ts";
 import type { Attachment, BrokerMessage, Message, MessageControl, MessageReceiptStatus, SessionInfo, SessionRegistration } from "./types.ts";
-import { createIntercomSessionAutocompleteProvider, transformIntercomSessionInput } from "./inline-session.ts";
+import { createIntercomSessionAutocompleteProvider, formatIntercomMention, resolveSessionAlias } from "./inline-session.ts";
 import {
   INTERCOM_EXTENSION_REGISTER_EVENT,
   INTERCOM_EXTENSION_REGISTRY_READY_EVENT,
@@ -608,9 +608,6 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
   let runtimeGeneration = 0;
   let agentRunning = false;
   const activeTools = new Map<string, string>();
-  const INTERCOM_SESSION_CACHE_TTL_MS = 2000;
-  let intercomSessionCache: SessionInfo[] | null = null;
-  let intercomSessionCacheAt = 0;
   const replyTracker = new ReplyTracker();
 
   const seenInboundMessages = new Map<string, number>();
@@ -1277,7 +1274,6 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
       if (client !== nextClient) return;
       switch (message.type) {
         case "registered": {
-          invalidateIntercomSessionCache();
           const supported = message.features?.includes(EXTENSION_BUS_FEATURE) ?? false;
           if (supported && localExtensions.size > 0) {
             nextClient.updateExtensionCapabilities(currentExtensionCapabilities());
@@ -1335,13 +1331,11 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
           handleMessageControl(message.control);
           break;
         case "session_joined":
-          invalidateIntercomSessionCache();
           for (const namespace of localExtensions.keys()) {
             emitLocalExtensionEvent(namespace, { type: "session_joined", session: message.session });
           }
           break;
         case "session_left":
-          invalidateIntercomSessionCache();
           for (const namespace of localExtensions.keys()) {
             emitLocalExtensionEvent(namespace, { type: "session_left", sessionId: message.sessionId });
           }
@@ -1396,7 +1390,7 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
       });
     }, getReconnectDelayMs());
   }
-  async function ensureConnected(reason: "startup" | "background" | "tool" | "overlay" | "autocomplete"): Promise<IntercomClient> {
+  async function ensureConnected(reason: "startup" | "background" | "tool" | "overlay"): Promise<IntercomClient> {
     if (!config.enabled) {
       throw new Error("Intercom disabled");
     }
@@ -1448,24 +1442,14 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
     reconnectPromiseGeneration = generationAtStart;
     return nextReconnectPromise;
   }
-  function invalidateIntercomSessionCache(): void {
-    intercomSessionCache = null;
-    intercomSessionCacheAt = 0;
-  }
-  async function getVisibleIntercomSessions(): Promise<SessionInfo[]> {
-    const now = Date.now();
-    if (intercomSessionCache && now - intercomSessionCacheAt < INTERCOM_SESSION_CACHE_TTL_MS) {
-      return intercomSessionCache;
-    }
+  async function listIntercomSessions(): Promise<SessionInfo[]> {
     try {
-      const activeClient = await ensureConnected("autocomplete");
+      const activeClient = await ensureConnected("tool");
       const sessions = await activeClient.listSessions();
       const currentSessionId = activeClient.sessionId;
-      intercomSessionCache = currentSessionId
+      return currentSessionId
         ? sessions.filter((session) => session.id !== currentSessionId)
         : sessions;
-      intercomSessionCacheAt = Date.now();
-      return intercomSessionCache;
     } catch {
       return [];
     }
@@ -1580,7 +1564,6 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
     });
   }
   function startSessionRuntime(ctx: ExtensionContext): void {
-    invalidateIntercomSessionCache();
     const previousClient = client;
     failPendingOutboxRequests(runtimeGeneration, "session_ended", "Session replaced");
     shuttingDown = false;
@@ -1727,14 +1710,15 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
       return;
     }
     startSessionRuntime(ctx);
+    // ctx.ui is a full ExtensionUIContext in pi, but partial fakes appear in tests and
+    // older hosts, so probe the method like insertIntoEditor does.
     const ui = ctx.ui as { addAutocompleteProvider?: (factory: (current: AutocompleteProvider) => AutocompleteProvider) => void } | undefined;
     if (ctx.hasUI && ui && typeof ui.addAutocompleteProvider === "function") {
-      ui.addAutocompleteProvider((current) => createIntercomSessionAutocompleteProvider(current, getVisibleIntercomSessions));
+      ui.addAutocompleteProvider((current) => createIntercomSessionAutocompleteProvider(current, listIntercomSessions));
     }
   });
   
   pi.on("session_shutdown", async () => {
-    invalidateIntercomSessionCache();
     unsubscribeExtensionRegister();
     unsubscribeSubagentControlIntercom();
     unsubscribeSubagentResultIntercom();
@@ -1830,16 +1814,6 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
     const details = message.details as { from: SessionInfo; message: Message; replyCommand?: string; bodyText?: string } | undefined;
     if (!details) return undefined;
     return new InlineMessageComponent(details.from, details.message, theme, details.replyCommand, details.bodyText, !options.expanded);
-  });
-
-  pi.on("input", async (event) => {
-    if (event.source === "extension") return { action: "continue" };
-    if (!event.text.includes("#")) return { action: "continue" };
-    if (event.text.trimStart().startsWith("/")) return { action: "continue" };
-    const sessions = await getVisibleIntercomSessions();
-    const transformed = transformIntercomSessionInput(event.text, sessions);
-    if (!transformed) return { action: "continue" };
-    return { action: "transform", text: transformed };
   });
 
   pi.on("tool_result", (event) => {
@@ -2722,6 +2696,28 @@ Usage:
     notifyIfLive(liveContext, `Intercom contact target: ${sessionId}`, "info", commandGeneration);
   }
 
+  async function insertIntercomMention(args: string, ctx: ExtensionContext): Promise<void> {
+    const commandGeneration = runtimeGeneration;
+    const liveContext = getLiveContext(ctx, commandGeneration);
+    if (!liveContext) return;
+    const target = args.trim().replace(/[.:-]+$/u, "");
+    if (!target) {
+      notifyIfLive(liveContext, "Usage: /intercom-mention <session name or ID>", "warning", commandGeneration);
+      return;
+    }
+    const sessions = await listIntercomSessions();
+    if (!getLiveContext(liveContext, commandGeneration)) return;
+    const session = resolveSessionAlias(sessions, target.startsWith("#") ? target : `#${target}`);
+    if (!session) {
+      notifyIfLive(liveContext, `No connected intercom session matches "${target}".`, "warning", commandGeneration);
+      return;
+    }
+    if (!insertIntoEditor(liveContext, formatIntercomMention(session, sessions))) {
+      notifyIfLive(liveContext, "Session mentions need an interactive editor.", "warning", commandGeneration);
+      return;
+    }
+    notifyIfLive(liveContext, `Inserted intercom mention for ${session.name || session.id}; review and send.`, "info", commandGeneration);
+  }
   async function setIntercomAlias(args: string, ctx: ExtensionContext): Promise<void> {
     const commandGeneration = runtimeGeneration;
     const liveContext = getLiveContext(ctx, commandGeneration);
@@ -2852,6 +2848,11 @@ Usage:
   pi.registerCommand("intercom-id", {
     description: "Insert a stable pi-intercom handoff snippet for this session into the editor",
     handler: async (_args, ctx) => insertIntercomId(ctx),
+  });
+
+  pi.registerCommand("intercom-mention", {
+    description: "Insert an intercom mention for another session into the editor (usage: /intercom-mention <name or ID>)",
+    handler: async (args, ctx) => insertIntercomMention(args, ctx),
   });
 
   pi.registerCommand("alias", {

@@ -21,7 +21,7 @@ import { sameCwd } from "../cwd.ts";
 import { EXACT_SEND_FEATURE, EXTENSION_BUS_FEATURE } from "../types.ts";
 import type { DeliveryState, SessionInfo, Message, BrokerMessage, ExtensionCapability, MessageControl } from "../types.ts";
 import { ExtensionStateManager } from "./extension-state.ts";
-import { assertNoLiveBroker } from "./runtime-claim.ts";
+import { assertNoLiveBroker, currentBrokerProcessIdentity, formatBrokerPidFile } from "./runtime-claim.ts";
 
 const INTERCOM_DIR = getIntercomDirPath();
 const LISTEN_TARGET = getBrokerListenTarget();
@@ -249,7 +249,7 @@ class IntercomBroker {
         writeFileSync(PORT_PATH, `${JSON.stringify(endpoint)}\n`, { mode: INTERCOM_RUNTIME_FILE_MODE });
         restrictIntercomRuntimeFile(PORT_PATH);
       }
-      writeFileSync(PID_PATH, String(process.pid), { mode: INTERCOM_RUNTIME_FILE_MODE });
+      writeFileSync(PID_PATH, formatBrokerPidFile(currentBrokerProcessIdentity()), { mode: INTERCOM_RUNTIME_FILE_MODE });
       restrictIntercomRuntimeFile(PID_PATH);
       console.log(`Intercom broker started (pid: ${process.pid})`);
     };
@@ -324,7 +324,7 @@ class IntercomBroker {
           this.rememberDisconnectedSession(existing);
           this.sessions.delete(sessionKey);
           this.clearMessageReceiptRoutesForSession(sessionKey);
-          this.broadcastSessionEvent({ type: "session_left", sessionId: existing.info.id }, existing, sessionKey, existing.scopeId);
+          this.broadcast({ type: "session_left", sessionId: existing.info.id }, sessionKey, existing.scopeId);
           this.recomputeNamespaceOwners();
           this.scheduleShutdownCheck();
         }
@@ -473,7 +473,6 @@ class IntercomBroker {
           lastActivity: session.lastActivity,
           ...(session.status !== undefined ? { status: session.status } : {}),
           ...(session.tmuxPane !== undefined ? { tmuxPane: session.tmuxPane } : {}),
-          ...(session.hidden !== undefined ? { hidden: session.hidden } : {}),
           trustedLocal: typeof LISTEN_TARGET === "string" && process.platform !== "win32",
         };
 
@@ -502,7 +501,7 @@ class IntercomBroker {
           sessionId: id,
           features: [EXTENSION_BUS_FEATURE, EXACT_SEND_FEATURE],
         });
-        this.broadcastSessionEvent({ type: "session_joined", session: info }, connectedSession, key, scopeId);
+        this.broadcast({ type: "session_joined", session: info }, key, scopeId);
 
         this.recomputeNamespaceOwners();
         this.flushMailboxForSession(connectedSession);
@@ -538,7 +537,7 @@ class IntercomBroker {
           this.rememberDisconnectedSession(existing);
           this.sessions.delete(currentKey);
           this.clearMessageReceiptRoutesForSession(currentKey);
-          this.broadcastSessionEvent({ type: "session_left", sessionId: existing.info.id }, existing, currentKey, existing.scopeId);
+          this.broadcast({ type: "session_left", sessionId: existing.info.id }, currentKey, existing.scopeId);
           this.recomputeNamespaceOwners();
           this.scheduleShutdownCheck();
         }
@@ -595,7 +594,7 @@ class IntercomBroker {
           throw new Error("List session not found");
         }
         const sessions = Array.from(this.sessions.values())
-          .filter(session => sameScope(session.scopeId, requester.scopeId) && !session.info.hidden)
+          .filter(session => sameScope(session.scopeId, requester.scopeId))
           .map(s => s.info);
         writeMessage(socket, { type: "sessions", requestId: clientMessage.requestId, sessions });
         break;
@@ -646,14 +645,6 @@ class IntercomBroker {
             this.writeDeliveryFailure(socket, message.id, "Session not found", "E_TARGET_NOT_FOUND");
             break;
           }
-          if (!fromSession.info.hidden && exactTarget.info.hidden && !message.replyTo) {
-            writeMessage(socket, {
-              type: "delivery_failed",
-              messageId: message.id,
-              reason: "Hidden session cannot be contacted directly; only replies to its pending asks are allowed",
-            });
-            break;
-          }
           if (exactTarget.info.endpointEpoch !== targetEpoch) {
             this.recordDelivery(currentKey, message.id, fingerprint, "failed", "Target endpoint changed before delivery", "E_TARGET_REBOUND", true);
             this.writeDeliveryFailure(socket, message.id, "Target endpoint changed before delivery", "E_TARGET_REBOUND", true);
@@ -669,14 +660,6 @@ class IntercomBroker {
             break;
           }
           const target = targets[0];
-          if (!fromSession.info.hidden && target.info.hidden && !message.replyTo) {
-            writeMessage(socket, {
-              type: "delivery_failed",
-              messageId: message.id,
-              reason: "Hidden session cannot be contacted directly; only replies to its pending asks are allowed",
-            });
-            break;
-          }
           const fingerprint = this.deliveryFingerprint(message, target.info.id);
           if (this.replayOrReject(socket, currentKey, message.id, fingerprint)) {
             break;
@@ -753,14 +736,6 @@ class IntercomBroker {
           }
           const disconnectedTarget = disconnectedTargets[0]!;
           const target = disconnectedTarget.info;
-          if (!fromSession.info.hidden && target.hidden && !message.replyTo) {
-            writeMessage(socket, {
-              type: "delivery_failed",
-              messageId: message.id,
-              reason: "Hidden session cannot be contacted directly; only replies to its pending asks are allowed",
-            });
-            break;
-          }
           const fingerprint = this.deliveryFingerprint(message, target.id);
           if (this.replayOrReject(socket, currentKey, message.id, fingerprint)) {
             break;
@@ -979,7 +954,7 @@ class IntercomBroker {
           session.info.lastActivity = now;
           if (changed || now - session.lastPresenceBroadcastAt >= PRESENCE_HEARTBEAT_MS) {
             session.lastPresenceBroadcastAt = now;
-            this.broadcastSessionEvent({ type: "presence_update", session: session.info }, session, currentKey, session.scopeId);
+            this.broadcast({ type: "presence_update", session: session.info }, currentKey, session.scopeId);
           }
         }
         break;
@@ -1334,15 +1309,11 @@ class IntercomBroker {
     );
   }
 
-  private broadcastSessionEvent(msg: BrokerMessage, source: ConnectedSession | null, exclude?: string, scopeId?: string): void {
+  private broadcast(msg: BrokerMessage, exclude?: string, scopeId?: string): void {
     for (const [id, session] of this.sessions) {
-      if (id === exclude || !sameScope(session.scopeId, scopeId)) {
-        continue;
+      if (id !== exclude && sameScope(session.scopeId, scopeId)) {
+        writeMessage(session.socket, msg);
       }
-      if (source?.info.hidden && !session.info.hidden) {
-        continue;
-      }
-      writeMessage(session.socket, msg);
     }
   }
 

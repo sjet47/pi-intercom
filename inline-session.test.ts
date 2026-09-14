@@ -4,10 +4,9 @@ import type { AutocompleteProvider } from "@earendil-works/pi-tui";
 import type { SessionInfo } from "./types.ts";
 import {
   createIntercomSessionAutocompleteProvider,
+  formatIntercomMention,
   resolveSessionAlias,
-  resolveSessionAliasesInText,
   sessionAutocompleteItems,
-  transformIntercomSessionInput,
 } from "./inline-session.ts";
 
 function session(overrides: Partial<SessionInfo>): SessionInfo {
@@ -29,7 +28,7 @@ const sessions = [
   session({ id: "session-unnamed-0004" }),
 ];
 
-test("sessionAutocompleteItems prefers unique names and falls back to short IDs", () => {
+test("sessionAutocompleteItems prefers unique names and falls back to session IDs", () => {
   const items = sessionAutocompleteItems(sessions, "");
 
   assert.equal(items.length, 4);
@@ -39,6 +38,22 @@ test("sessionAutocompleteItems prefers unique names and falls back to short IDs"
   assert.ok(items.some((item) => item.value === "#session-worker-0003"));
   assert.ok(items.some((item) => item.value === "#session-unnamed-0004"));
   assert.match(items[0]!.description ?? "", /planner/);
+});
+
+test("every offered autocomplete value resolves back to its own session", () => {
+  // A session whose name is another session's ID prefix used to make the short name
+  // resolve to the wrong peer.
+  const colliding = [
+    session({ id: "12345678-aaaa", name: undefined }),
+    session({ id: "session-other-0002", name: "12345678" }),
+  ];
+
+  for (const item of sessionAutocompleteItems(colliding, "")) {
+    const resolved = resolveSessionAlias(colliding, item.value);
+    assert.ok(resolved, `expected ${item.value} to resolve`);
+    const owner = colliding.find((candidate) => item.description?.includes(candidate.id));
+    assert.equal(resolved!.id, owner!.id, `${item.value} resolved to the wrong session`);
+  }
 });
 
 test("sessionAutocompleteItems filters by session name and ID", () => {
@@ -53,51 +68,19 @@ test("resolveSessionAlias resolves exact IDs, unique names, and unique prefixes"
   assert.equal(resolveSessionAlias(sessions, "#session-planner-000")?.id, "session-planner-0001");
   assert.equal(resolveSessionAlias(sessions, "#worker"), null);
   assert.equal(resolveSessionAlias(sessions, "#missing"), null);
+  assert.equal(resolveSessionAlias(sessions, "planner"), null);
+  assert.equal(resolveSessionAlias(sessions, "#"), null);
 });
 
-test("resolveSessionAliasesInText ignores unknown aliases and de-duplicates repeated sessions", () => {
-  const aliases = resolveSessionAliasesInText("Tell #planner and then #planner again.", sessions);
-  assert.ok(aliases);
-  assert.equal(aliases!.length, 1);
-  assert.equal(aliases![0]!.session.id, "session-planner-0001");
+test("formatIntercomMention names the target and the intercom call to make", () => {
+  const mention = formatIntercomMention(sessions[0]!, sessions);
+  assert.match(mention, /^#planner /);
+  assert.match(mention, /communicate with Pi session "planner" \(ID: session-planner-0001\)/);
+  assert.match(mention, /Prefer send for non-blocking updates and ask when a reply is required/);
 
-  assert.equal(resolveSessionAliasesInText("Use #unknown and #worker.", sessions), null);
-  assert.equal(resolveSessionAliasesInText("# Heading", sessions), null);
-});
-
-test("resolveSessionAliasesInText tolerates trailing sentence punctuation", () => {
-  for (const text of ["Ask #planner.", "Ask #planner, please.", "Ask #planner: now", "Ask #planner- now"]) {
-    const aliases = resolveSessionAliasesInText(text, sessions);
-    assert.ok(aliases, `expected ${text} to resolve`);
-    assert.equal(aliases![0]!.session.id, "session-planner-0001");
-  }
-
-  assert.equal(transformIntercomSessionInput("Ask #planner.", sessions)?.startsWith("Ask #planner.\n"), true);
-  assert.equal(resolveSessionAliasesInText("Use #missing.", sessions), null);
-});
-
-test("transformIntercomSessionInput appends an intercom instruction for known sessions", () => {
-  const transformed = transformIntercomSessionInput("Ask #planner for a status update.", sessions);
-  assert.ok(transformed);
-  assert.match(transformed!, /Ask #planner for a status update\./);
-  assert.match(transformed!, /Use the intercom tool to communicate with Pi session "planner" \(ID: session-planner-0001\)/);
-  assert.match(transformed!, /<pi-intercom>/);
-  assert.match(transformed!, /<\/pi-intercom>/);
-  assert.match(transformed!, /Prefer send for non-blocking updates and ask when a reply is required/);
-});
-
-test("transformIntercomSessionInput supports multiple known sessions", () => {
-  const transformed = transformIntercomSessionInput("Tell #planner and #session-worker-0003 to compare notes.", sessions);
-  assert.ok(transformed);
-  assert.match(transformed!, /"planner"/);
-  assert.match(transformed!, /"worker"/);
-  assert.match(transformed!, /communicate with Pi sessions:/);
-});
-
-test("transformIntercomSessionInput leaves unknown input unchanged", () => {
-  assert.equal(transformIntercomSessionInput("Use #missing.", sessions), null);
-  assert.equal(transformIntercomSessionInput("No mention here.", sessions), null);
-  assert.equal(transformIntercomSessionInput("# Heading", sessions), null);
+  const unnamed = formatIntercomMention(sessions[3]!, sessions);
+  assert.match(unnamed, /^#session-unnamed-0004 /);
+  assert.match(unnamed, /communicate with Pi session \(ID: session-unnamed-0004\)/);
 });
 
 function fakeCurrentProvider(): AutocompleteProvider {
@@ -154,6 +137,40 @@ test("autocomplete provider leaves slash commands and stops after a completed al
   );
   assert.equal(
     await provider.getSuggestions(["#planner "], 0, 10, { signal: new AbortController().signal, force: false }),
+    null,
+  );
+});
+
+test("autocomplete provider memoizes the roster for the cache window", async () => {
+  const current = fakeCurrentProvider();
+  let calls = 0;
+  let clock = 1_000;
+  const provider = createIntercomSessionAutocompleteProvider(
+    current,
+    async () => {
+      calls += 1;
+      return sessions;
+    },
+    () => clock,
+  );
+  const options = { signal: new AbortController().signal, force: false };
+
+  await provider.getSuggestions(["#p"], 0, 2, options);
+  clock += 500;
+  await provider.getSuggestions(["#p"], 0, 2, options);
+  assert.equal(calls, 1);
+
+  clock += 2_000;
+  await provider.getSuggestions(["#p"], 0, 2, options);
+  assert.equal(calls, 2);
+});
+
+test("autocomplete provider stays quiet when the roster is unavailable", async () => {
+  const current = fakeCurrentProvider();
+  const provider = createIntercomSessionAutocompleteProvider(current, async () => []);
+
+  assert.equal(
+    await provider.getSuggestions(["#p"], 0, 2, { signal: new AbortController().signal, force: false }),
     null,
   );
 });

@@ -130,13 +130,17 @@ intercom({
 
 ### Inline Session Mentions
 
-In the TUI input box, type `#` to autocomplete connected intercom sessions. A mention can use a session name or a session ID prefix, for example `#planner` or `#8f3d2a11`, and it can appear anywhere in the prompt.
+Type `#` in the TUI input box to autocomplete connected intercom sessions, then run `/intercom-mention <name or ID>` to insert a ready-to-send mention into the editor:
 
 ```
-Ask #planner for a status update.
+#planner Use the intercom tool to communicate with Pi session "planner" (ID: ...). Prefer send for non-blocking updates and ask when a reply is required.
 ```
 
-When a submitted prompt contains a known `#session` mention, pi-intercom appends a short `<pi-intercom>...</pi-intercom>` block telling the model to use the `intercom` tool for that session. A trailing `.`, `:`, or `-` is treated as sentence punctuation rather than part of the mention, so `Ask #planner.` still resolves. Duplicate session names fall back to session IDs in autocomplete and resolution.
+The mention you type is the same text the model receives, so you can edit or delete it before sending. A mention can use a session name or a session ID prefix, for example `#planner` or `#8f3d2a11`. Duplicate session names fall back to session IDs, and pi-intercom only offers values that resolve back to the exact session they name.
+
+Autocomplete for a mention only fires on `#` tokens that match a connected session, so ordinary `#` text such as a Markdown heading or an issue number is left alone.
+
+For this session's own handoff target, use `/intercom-id` instead.
 
 ### Receiving Messages
 
@@ -575,9 +579,9 @@ Supported `config.json` keys include `stableId` for restart-stable addressing, `
 
 **`ask` stays client-side.** The broker still routes plain messages; it does not have a special request/response mode for `ask`. The client waits for a matching reply before it triggers a new turn, then returns that reply as the tool result. Reply hints make that flow practical by showing the recipient the exact `send` call to use. Separately, `list` / `sessions` now carry a `requestId` so a delayed session-list reply cannot be mistaken for a newer one.
 
-## Anomaly CLI
+## Scripting CLI
 
-The package also ships a hidden `pi-intercom` binary for scripted one-way sends and blocking asks. `send` connects as a hidden session named `noreply`; `ask` connects as a hidden session named `anomaly`. No `list` result ever shows `noreply`, `anomaly`, or any other hidden client. The broker rejects direct sends from ordinary sessions to hidden clients, so a CLI `send` appears as `From noreply` with no reply path, while a CLI `ask` appears as `From anomaly` and creates a normal pending ask that the receiving session can answer with `intercom({ action: "reply", ... })`.
+The package also ships a `pi-intercom` binary for scripted sends and blocking asks. It registers as an ordinary intercom session named `pi-intercom-cli` (override with `--name`), so it appears in the roster like any other participant, is attributed by name, and can be answered directly while it is connected. Nothing about it is special-cased in the broker.
 
 ```sh
 pi-intercom list
@@ -600,7 +604,7 @@ npm link
 
 If you are using a published release instead, the package name is also `pi-intercom`, so `npm install -g pi-intercom` exposes the same `pi-intercom` command.
 
-`list` shows ordinary intercom sessions only; hidden clients such as `noreply` and `anomaly` are never listed, but they can still `send`/`ask` to listed sessions and remain valid reply targets for pending asks. `send` returns immediately after delivery. `ask` sends a blocking request and waits for the reply; it exits immediately only when delivery is rejected (for example the target is disconnected or does not exist). Set `PI_INTERCOM_ASK_TIMEOUT_MS` to change the ask timeout from the default of 10 minutes. If the CLI exits before an ask is answered, the existing named-session mailbox can queue the reply for a later `anomaly` process with the same working directory.
+`list` shows the same roster every other session sees, including the CLI's own entry. `send` returns immediately after delivery. `ask` sends a blocking request and waits for the reply; it exits immediately only when delivery is rejected (for example the target is disconnected or does not exist). Set `PI_INTERCOM_ASK_TIMEOUT_MS` to change the ask timeout from the default of 10 minutes. If the CLI exits before an ask is answered, the broker's existing mailbox queues the reply and hands it to the next CLI process that registers with the same name and working directory.
 
 ## pi-intercom vs pi-messenger
 
@@ -622,7 +626,7 @@ Use pi-messenger for multi-agent swarms working on a shared task. Use pi-interco
 ├── index.ts              # Extension entry point
 ├── types.ts              # SessionInfo, Message, protocol types
 ├── config.ts             # Config loading
-├── cli.ts                # Hidden anomaly CLI
+├── cli.ts                # Scripting CLI
 ├── project-agent.ts      # Herdr project-pane launch and cwd target resolution
 ├── bin/
 │   └── pi-intercom.mjs # Installed binary wrapper
@@ -648,5 +652,5 @@ Use pi-messenger for multi-agent swarms working on a shared task. Use pi-interco
 - **Same machine only** — Uses local sockets/pipes, no network support
 - **No dedicated intercom log** — Messages are kept in Pi session history, but there is no separate intercom transcript or inbox
 - **No attachments UI** — `file`, `snippet`, and `context` attachments are supported in the protocol, but not in the compose overlay
-- **Only connected sessions appear** — The list shows Pi sessions that have loaded `pi-intercom` and successfully registered with the broker, not every open Pi process on the machine. Hidden `noreply` / `anomaly` CLI clients are intentionally excluded from all session lists.
+- **Only connected sessions appear** — The list shows Pi sessions that have loaded `pi-intercom` and successfully registered with the broker, not every open Pi process on the machine.
 - **Broker lifecycle** — The broker auto-spawns on first use and exits when idle; sessions reconnect automatically if the broker restarts

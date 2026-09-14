@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { EventEmitter, once } from "node:events";
 import { spawn, type ChildProcess } from "node:child_process";
 import { ReplyTracker } from "./reply-tracker.ts";
+import { cliSessionRegistration, DEFAULT_CLI_NAME } from "./cli.ts";
 import type { BrokerMessage, Message, SessionInfo } from "./types.ts";
 import {
   INTERCOM_EXTENSION_REGISTER_EVENT,
@@ -1855,12 +1856,17 @@ test("obsolete toolVisibility config never hides or reveals the intercom tool", 
   });
 });
 
-test("inline #session mention transforms a submitted prompt into an intercom instruction", { concurrency: false }, async () => {
+test("/intercom-mention inserts a resolvable mention and intercom instruction into the editor", { concurrency: false }, async () => {
   const { default: piIntercomExtension } = await import("./index.ts");
   const { planner, cleanup } = await setupClients();
+  let editorText = "";
   const harness = createExtensionHarness("inline-session-worker", {
     hasUI: true,
-    activeTools: ["read"],
+    ui: {
+      notify: () => undefined,
+      getEditorText: () => editorText,
+      setEditorText: (text: string) => { editorText = text; },
+    },
   });
 
   try {
@@ -1868,48 +1874,45 @@ test("inline #session mention transforms a submitted prompt into an intercom ins
     await harness.emitLifecycle("session_start");
     await waitForSessionByName(planner, "inline-session-worker");
 
-    const results = await harness.emitLifecycleResults("input", {
-      text: "Ask #planner for a status update.",
-      source: "interactive",
-    });
-    const transformed = results.find(
-      (result): result is { action: "transform"; text: string } =>
-        Boolean(result) && typeof result === "object" && (result as { action?: string }).action === "transform" && typeof (result as { text?: unknown }).text === "string",
-    );
-    assert.ok(transformed);
-    assert.match(transformed!.text, /Use the intercom tool to communicate with Pi session "planner" \(ID: .*\)/);
-    assert.match(transformed!.text, /<pi-intercom>/);
-    assert.match(transformed!.text, /<\/pi-intercom>/);
-    assert.equal(transformed!.text.startsWith("Ask #planner for a status update."), true);
+    editorText = "Please sync with";
+    await harness.commands.get("intercom-mention")!("planner", harness.ctx);
+
+    assert.match(editorText, /^Please sync with\n\n#planner /);
+    assert.match(editorText, /communicate with Pi session "planner" \(ID: .*\)/);
+    assert.match(editorText, /Prefer send for non-blocking updates and ask when a reply is required/);
   } finally {
     await harness.emitLifecycle("session_shutdown");
     await cleanup();
   }
 });
 
-test("inline #session mention leaves unrelated input untouched", { concurrency: false }, async () => {
+test("/intercom-mention reports unknown targets and requires an argument", { concurrency: false }, async () => {
   const { default: piIntercomExtension } = await import("./index.ts");
   const { planner, cleanup } = await setupClients();
-  const harness = createExtensionHarness("inline-session-bystander", { hasUI: true });
+  const notifications: string[] = [];
+  let editorText = "";
+  const harness = createExtensionHarness("inline-session-bystander", {
+    hasUI: true,
+    ui: {
+      notify: (message: string) => notifications.push(message),
+      getEditorText: () => editorText,
+      setEditorText: (text: string) => { editorText = text; },
+    },
+  });
 
   try {
     piIntercomExtension(harness.pi as never);
     await harness.emitLifecycle("session_start");
     await waitForSessionByName(planner, "inline-session-bystander");
 
-    const cases = [
-      { text: "No mention here.", source: "interactive" },
-      { text: "Ask #planner for a status update.", source: "extension" },
-      { text: "/skill:pi-intercom #planner", source: "interactive" },
-      { text: "Ask #nobody-here for a status update.", source: "interactive" },
-    ];
-    for (const input of cases) {
-      const results = await harness.emitLifecycleResults("input", input);
-      const transforms = results.filter(
-        (result) => typeof result === "object" && result !== null && (result as { action?: string }).action === "transform",
-      );
-      assert.deepEqual(transforms, [], `expected no transform for ${JSON.stringify(input)}`);
-    }
+    await harness.commands.get("intercom-mention")!("   ", harness.ctx);
+    assert.match(notifications.at(-1) ?? "", /Usage: \/intercom-mention/);
+
+    await harness.commands.get("intercom-mention")!("nobody-here", harness.ctx);
+    assert.match(notifications.at(-1) ?? "", /No connected intercom session matches "nobody-here"/);
+
+    // Nothing is ever written into the editor unless a target resolves.
+    assert.equal(editorText, "");
   } finally {
     await harness.emitLifecycle("session_shutdown");
     await cleanup();
@@ -3461,142 +3464,75 @@ test("broker rejects blocking asks to disconnected targets", { concurrency: fals
   }
 });
 
-test("hidden anomaly client sees ordinary sessions but never hidden sessions", { concurrency: false }, async () => {
-  const { planner, orchestrator, cleanup } = await setupClients();
-  const cli = new IntercomClient();
-
-  try {
-    await cli.connect({
-      name: "anomaly",
-      cwd: repoDir,
-      model: "intercom-cli",
-      pid: process.pid,
-      startedAt: Date.now(),
-      lastActivity: Date.now(),
-      hidden: true,
-    });
-
-    const ordinarySessions = await planner.listSessions();
-    assert.equal(ordinarySessions.some((session) => session.id === cli.sessionId), false);
-    assert.equal(ordinarySessions.some((session) => session.id === orchestrator.sessionId), true);
-
-    const cliSessions = await cli.listSessions();
-    assert.equal(cliSessions.some((session) => session.id === cli.sessionId), false);
-    assert.equal(cliSessions.some((session) => session.hidden), false);
-    assert.equal(cliSessions.some((session) => session.id === planner.sessionId), true);
-    assert.equal(cliSessions.some((session) => session.id === orchestrator.sessionId), true);
-  } finally {
-    await cli.disconnect().catch(() => undefined);
-    await cleanup();
-  }
-});
-
-test("hidden anomaly send arrives as anomaly and cannot be answered directly", { concurrency: false }, async () => {
-  const { planner, orchestrator, cleanup } = await setupClients();
-  const cli = new IntercomClient();
-
-  try {
-    await cli.connect({
-      name: "anomaly",
-      cwd: repoDir,
-      model: "intercom-cli",
-      pid: process.pid,
-      startedAt: Date.now(),
-      lastActivity: Date.now(),
-      hidden: true,
-    });
-
-    const cliSessions = await cli.listSessions();
-    const target = cliSessions.find((session) => session.id === orchestrator.sessionId);
-    assert.ok(target);
-    const received = once(orchestrator, "message") as Promise<[SessionInfo, Message]>;
-    const sendResult = await cli.send(target!.id, { text: "One-way anomaly message" });
-    assert.equal(sendResult.delivered, true);
-    const [from, message] = await received;
-    assert.equal(from.name, "anomaly");
-    assert.equal(from.hidden, true);
-    assert.equal(message.content.text, "One-way anomaly message");
-    assert.equal(message.expectsReply, undefined);
-
-    const directReply = await orchestrator.send(cli.sessionId!, { text: "Try to reply directly" });
-    assert.equal(directReply.delivered, false);
-    assert.match(directReply.reason ?? "", /hidden session cannot be contacted directly/i);
-  } finally {
-    await cli.disconnect().catch(() => undefined);
-    await cleanup();
-  }
-});
-
-test("hidden anomaly ask can be answered through the pending reply flow", { concurrency: false }, async () => {
-  const { planner, orchestrator, cleanup } = await setupClients();
-  const cli = new IntercomClient();
-
-  try {
-    await cli.connect({
-      name: "anomaly",
-      cwd: repoDir,
-      model: "intercom-cli",
-      pid: process.pid,
-      startedAt: Date.now(),
-      lastActivity: Date.now(),
-      hidden: true,
-    });
-
-    const askId = "hidden-anomaly-ask";
-    const cliSessions = await cli.listSessions();
-    const target = cliSessions.find((session) => session.id === orchestrator.sessionId);
-    assert.ok(target);
-    const receivedAsk = once(orchestrator, "message") as Promise<[SessionInfo, Message]>;
-    const replyReceived = waitForReply(cli, askId);
-    const sendResult = await cli.send(target!.id, {
-      messageId: askId,
-      text: "Can anomaly ask?",
-      expectsReply: true,
-    });
-    assert.equal(sendResult.delivered, true);
-    const [from, askMessage] = await receivedAsk;
-    assert.equal(from.name, "anomaly");
-    assert.equal(askMessage.expectsReply, true);
-
-    const reply = await orchestrator.send(cli.sessionId!, {
-      text: "Yes, ask is replyable.",
-      replyTo: askId,
-    });
-    assert.equal(reply.delivered, true);
-    const replyMessage = (await replyReceived).message;
-    assert.equal(replyMessage.replyTo, askId);
-    assert.equal(replyMessage.content.text, "Yes, ask is replyable.");
-  } finally {
-    await cli.disconnect().catch(() => undefined);
-    await cleanup();
-  }
-});
-
-test("hidden anomaly blocking ask fails immediately when target is disconnected", { concurrency: false }, async () => {
+test("the CLI registers as an ordinary session that peers can see", { concurrency: false }, async () => {
   const { planner, cleanup } = await setupClients();
   const cli = new IntercomClient();
 
   try {
-    await cli.connect({
-      name: "anomaly",
-      cwd: repoDir,
-      model: "intercom-cli",
-      pid: process.pid,
-      startedAt: Date.now(),
-      lastActivity: Date.now(),
-      hidden: true,
-    });
-    const disconnectedId = planner.sessionId!;
-    await planner.disconnect();
+    await cli.connect(cliSessionRegistration(DEFAULT_CLI_NAME, repoDir));
 
-    const result = await cli.send(disconnectedId, {
-      messageId: "hidden-anomaly-offline-ask",
-      text: "Do not queue this blocking ask.",
-      expectsReply: true,
-    });
-    assert.equal(result.delivered, false);
-    assert.match(result.reason ?? "", /not currently connected/);
-    assert.match(result.reason ?? "", /not queued/);
+    const plannerSessions = await planner.listSessions();
+    assert.equal(plannerSessions.some((session) => session.id === cli.sessionId), true);
+    assert.equal(plannerSessions.find((session) => session.id === cli.sessionId)?.name, DEFAULT_CLI_NAME);
+
+    // The CLI sees itself in its own roster, exactly like any other participant.
+    const cliSessions = await cli.listSessions();
+    assert.equal(cliSessions.some((session) => session.id === cli.sessionId), true);
+    assert.equal(cliSessions.some((session) => session.id === planner.sessionId), true);
+  } finally {
+    await cli.disconnect().catch(() => undefined);
+    await cleanup();
+  }
+});
+
+test("a CLI send is attributed to the CLI and can be answered directly", { concurrency: false }, async () => {
+  const { planner, cleanup } = await setupClients();
+  const cli = new IntercomClient();
+
+  try {
+    await cli.connect(cliSessionRegistration(DEFAULT_CLI_NAME, repoDir));
+    const target = (await cli.listSessions()).find((session) => session.id === planner.sessionId);
+    assert.ok(target);
+
+    const received = once(planner, "message") as Promise<[SessionInfo, Message]>;
+    const sendResult = await cli.send(target!.id, { text: "One-way CLI message" });
+    assert.equal(sendResult.delivered, true);
+    const [from, message] = await received;
+    assert.equal(from.name, DEFAULT_CLI_NAME);
+    assert.equal(message.content.text, "One-way CLI message");
+
+    // The CLI is a normal session, so an ordinary send reaches it while it is connected.
+    const directReply = await planner.send(cli.sessionId!, { text: "Answer from planner" });
+    assert.equal(directReply.delivered, true);
+  } finally {
+    await cli.disconnect().catch(() => undefined);
+    await cleanup();
+  }
+});
+
+test("a CLI ask is answered through the normal reply flow", { concurrency: false }, async () => {
+  const { planner, cleanup } = await setupClients();
+  const cli = new IntercomClient();
+
+  try {
+    await cli.connect(cliSessionRegistration(DEFAULT_CLI_NAME, repoDir));
+    const askId = "cli-ask";
+    const target = (await cli.listSessions()).find((session) => session.id === planner.sessionId);
+    assert.ok(target);
+    const receivedAsk = once(planner, "message") as Promise<[SessionInfo, Message]>;
+    const replyReceived = waitForReply(cli, askId);
+
+    const sendResult = await cli.send(target!.id, { messageId: askId, text: "Can the CLI ask?", expectsReply: true });
+    assert.equal(sendResult.delivered, true);
+    const [from, askMessage] = await receivedAsk;
+    assert.equal(from.name, DEFAULT_CLI_NAME);
+    assert.equal(askMessage.expectsReply, true);
+
+    const reply = await planner.send(cli.sessionId!, { text: "Yes, ask is replyable.", replyTo: askId });
+    assert.equal(reply.delivered, true);
+    const replyMessage = (await replyReceived).message;
+    assert.equal(replyMessage.replyTo, askId);
+    assert.equal(replyMessage.content.text, "Yes, ask is replyable.");
   } finally {
     await cli.disconnect().catch(() => undefined);
     await cleanup();

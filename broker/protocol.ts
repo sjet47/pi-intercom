@@ -169,10 +169,6 @@ export function isSessionInfo(value: unknown): value is SessionInfo {
     return false;
   }
 
-  if (value.hidden !== undefined && typeof value.hidden !== "boolean") {
-    return false;
-  }
-
   return value.trustedLocal === undefined || typeof value.trustedLocal === "boolean";
 }
 
@@ -199,9 +195,6 @@ export function isSessionRegistration(value: unknown): value is SessionRegistrat
     return false;
   }
   if (value.runtimeFallbackAlias !== undefined && typeof value.runtimeFallbackAlias !== "boolean") {
-    return false;
-  }
-  if (value.hidden !== undefined && typeof value.hidden !== "boolean") {
     return false;
   }
   if (value.extensions !== undefined && !Array.isArray(value.extensions)) {

@@ -25,8 +25,6 @@ export interface SessionInfo {
   status?: string;
   peerUid?: number;
   trustedLocal?: boolean;
-  /** True for non-agent clients such as the anomaly CLI that should not appear in ordinary session lists. */
-  hidden?: boolean;
   /** Live context-window usage, pushed via presence from the source session's
    *  getContextUsage(). contextPct is 0..100 (rounded); contextTokens /
    *  contextWindow are raw token counts. All optional: unknown right after a

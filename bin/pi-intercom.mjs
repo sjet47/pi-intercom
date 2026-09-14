@@ -1,28 +1,37 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const require = createRequire(import.meta.url);
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-let tsxCli;
-try {
-  tsxCli = require.resolve("tsx/cli");
-} catch {
+// Mirror broker/spawn.ts getTsxCliPath(): resolve the tsx package main entry (its
+// "exports" field does not expose dist/cli.mjs as a subpath) and locate cli.mjs next
+// to it, then fall back to the flat plugin-store layout and the nested layout.
+function resolveTsxCli() {
   try {
-    const tsxMain = require.resolve("tsx");
-    tsxCli = join(dirname(tsxMain), "cli.mjs");
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(`pi-intercom: cannot resolve tsx CLI: ${message}`);
-    process.exit(1);
+    const requireFromRoot = createRequire(join(root, "package.json"));
+    return join(dirname(requireFromRoot.resolve("tsx")), "cli.mjs");
+  } catch {
+    // Fall through to the filesystem layouts below.
   }
+  const siblingTsxCli = join(root, "..", "tsx", "dist", "cli.mjs");
+  if (existsSync(siblingTsxCli)) {
+    return siblingTsxCli;
+  }
+  const nestedTsxCli = join(root, "node_modules", "tsx", "dist", "cli.mjs");
+  return existsSync(nestedTsxCli) ? nestedTsxCli : null;
 }
 
-const cliPath = join(root, "cli.ts");
-const child = spawn(process.execPath, [tsxCli, cliPath, ...process.argv.slice(2)], {
+const tsxCli = resolveTsxCli();
+if (!tsxCli) {
+  console.error("pi-intercom: cannot resolve the tsx CLI; run `npm install` in the package directory.");
+  process.exit(1);
+}
+
+const child = spawn(process.execPath, [tsxCli, join(root, "cli.ts"), ...process.argv.slice(2)], {
   stdio: "inherit",
 });
 

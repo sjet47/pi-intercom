@@ -1,14 +1,60 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 import { getAskTimeoutMs, loadConfig } from "./config.ts";
 import { IntercomClient } from "./broker/client.ts";
 import { spawnBrokerIfNeeded } from "./broker/spawn.ts";
-import type { Message, SessionInfo } from "./types.ts";
+import type { Message, SessionInfo, SessionRegistration } from "./types.ts";
 
-const CLI_NAME = "anomaly";
-const SEND_NAME = "noreply";
-const ASK_NAME = "anomaly";
-const CLI_MODEL = "pi-intercom";
-const CLI_VERSION = "0.10.0";
+export const DEFAULT_CLI_NAME = "pi-intercom-cli";
+export const CLI_MODEL = "pi-intercom";
+
+/**
+ * The CLI is an ordinary intercom session: it describes itself with the same fields
+ * every pi session reports, and the broker applies the same visibility and delivery
+ * rules to it. Anything it wants delivered while it is not running goes through the
+ * broker mailbox like any other offline participant.
+ */
+export function cliSessionRegistration(name: string = DEFAULT_CLI_NAME, cwd: string = process.cwd()): SessionRegistration {
+  const now = Date.now();
+  return { name, cwd, model: CLI_MODEL, pid: process.pid, startedAt: now, lastActivity: now };
+}
+
+function cliVersion(): string {
+  try {
+    const manifest = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")) as { version?: unknown };
+    return typeof manifest.version === "string" ? manifest.version : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+/** Pull `--name <value>` (or `--name=<value>`) out of the arguments so every subcommand can share it. */
+function takeNameFlag(args: string[]): { name: string; rest: string[] } {
+  let name = DEFAULT_CLI_NAME;
+  const rest: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index]!;
+    if (arg === "--name") {
+      const value = args[index + 1];
+      if (value === undefined) {
+        throw new Error("--name requires a value");
+      }
+      name = value;
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--name=")) {
+      name = arg.slice("--name=".length);
+      continue;
+    }
+    rest.push(arg);
+  }
+  if (!name.trim()) {
+    throw new Error("--name cannot be empty");
+  }
+  return { name: name.trim(), rest };
+}
 
 interface ReplyWaiter {
   promise: Promise<Message>;
@@ -20,11 +66,14 @@ function usage(): string {
     "Usage:",
     "  pi-intercom list",
     "  pi-intercom send <target> <message>",
-    "  pi-intercom ask <target> <message>",
+    "  pi-intercom ask <target> <message> [--name <session name>]",
     "",
-    "The CLI connects hidden. send uses the name \"noreply\" so ordinary",
-    "sessions cannot reply; ask uses the name \"anomaly\" and remains replyable",
-    "through the normal reply flow.",
+    "The CLI registers as an ordinary intercom session named \"pi-intercom-cli\" by",
+    "default; pass --name to change it. Replies to its asks route back over the same",
+    "connection, and the broker queues them if this process exits first.",
+    "",
+    "Flags:",
+    "  --name <session name>       intercom name to register under (default pi-intercom-cli)",
     "",
     "Environment:",
     "  PI_INTERCOM_ASK_TIMEOUT_MS  ask timeout in milliseconds (default 600000)",
@@ -103,23 +152,14 @@ function resolveTarget(sessions: SessionInfo[], nameOrId: string): SessionInfo |
 function formatSession(session: SessionInfo): string {
   const name = session.name || session.id.slice(0, 8);
   const status = session.status ? ` [${session.status}]` : "";
-  const hidden = session.hidden ? " hidden" : "";
-  return `${name} (${session.id})${status}${hidden} - ${session.cwd} [${session.model}]`;
+  return `${name} (${session.id})${status} - ${session.cwd} [${session.model}]`;
 }
 
-async function connectHiddenClient(name: string): Promise<IntercomClient> {
+async function connectCliClient(name: string): Promise<IntercomClient> {
   const config = loadConfig();
   await spawnBrokerIfNeeded(config.brokerCommand, config.brokerArgs);
   const client = new IntercomClient();
-  await client.connect({
-    name,
-    cwd: process.cwd(),
-    model: CLI_MODEL,
-    pid: process.pid,
-    startedAt: Date.now(),
-    lastActivity: Date.now(),
-    hidden: true,
-  });
+  await client.connect(cliSessionRegistration(name));
   return client;
 }
 
@@ -176,13 +216,13 @@ async function runAsk(client: IntercomClient, target: string, text: string): Pro
 }
 
 async function main(): Promise<number> {
-  const args = process.argv.slice(2);
+  const { name, rest: args } = takeNameFlag(process.argv.slice(2));
   if (args.length === 0 || args[0] === "--help" || args[0] === "-h") {
     console.log(usage());
     return 0;
   }
   if (args[0] === "--version") {
-    console.log(`pi-intercom ${CLI_VERSION}`);
+    console.log(`pi-intercom ${cliVersion()}`);
     return 0;
   }
 
@@ -192,7 +232,7 @@ async function main(): Promise<number> {
       if (rest.length > 0) {
         throw new Error("list does not accept arguments");
       }
-      const client = await connectHiddenClient(CLI_NAME);
+      const client = await connectCliClient(name);
       try {
         await runList(client);
         return 0;
@@ -204,7 +244,7 @@ async function main(): Promise<number> {
       if (rest.length < 2) {
         throw new Error("send requires <target> and <message>");
       }
-      const client = await connectHiddenClient(SEND_NAME);
+      const client = await connectCliClient(name);
       try {
         await runSend(client, rest[0]!, rest.slice(1).join(" "));
         return 0;
@@ -216,7 +256,7 @@ async function main(): Promise<number> {
       if (rest.length < 2) {
         throw new Error("ask requires <target> and <message>");
       }
-      const client = await connectHiddenClient(ASK_NAME);
+      const client = await connectCliClient(name);
       try {
         await runAsk(client, rest[0]!, rest.slice(1).join(" "));
         return 0;
@@ -229,12 +269,18 @@ async function main(): Promise<number> {
   }
 }
 
-main().then(
-  (code) => {
-    process.exitCode = code;
-  },
-  (error) => {
-    console.error(`pi-intercom: ${toError(error).message}`);
-    process.exitCode = 1;
-  },
-);
+// Importing this module (from tests, or from another script) must not run the CLI.
+const invokedAsScript = process.argv[1] !== undefined
+  && import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (invokedAsScript) {
+  main().then(
+    (code) => {
+      process.exitCode = code;
+    },
+    (error) => {
+      console.error(`pi-intercom: ${toError(error).message}`);
+      process.exitCode = 1;
+    },
+  );
+}

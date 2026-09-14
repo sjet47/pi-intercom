@@ -138,7 +138,7 @@ Type `#` in the TUI input box to autocomplete connected intercom sessions, then 
 
 The mention you type is the same text the model receives, so you can edit or delete it before sending. A mention can use a session name or a session ID prefix, for example `#planner` or `#8f3d2a11`. Duplicate session names fall back to session IDs, and pi-intercom only offers values that resolve back to the exact session they name.
 
-Autocomplete for a mention only fires on `#` tokens that match a connected session, so ordinary `#` text such as a Markdown heading or an issue number is left alone.
+Completion pops up when `#` starts a line or follows a space or tab. Typed straight after other characters — `ask#planner`, `http://host#frag` — it stays quiet; press **Tab** there to complete anyway. A `#` that matches no connected session, such as a Markdown heading or an issue number, is left alone. The positional rule comes from Pi's editor, not from pi-intercom.
 
 For this session's own handoff target, use `/intercom-id` instead.
 

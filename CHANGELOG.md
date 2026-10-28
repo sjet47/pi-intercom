@@ -4,6 +4,12 @@ All notable changes to the `pi-intercom` extension will be documented in this fi
 
 ## [Unreleased]
 
+### Added
+- Added `#session` mentions in the TUI input box: `#` autocompletes connected intercom sessions at a line start or after a space or tab (**Tab** also completes a mention typed straight after text), and `/intercom-mention <name or ID>` inserts the mention plus an intercom-tool instruction into the editor, so the text the user sends is the text the model reads.
+
+### Fixed
+- Broker startup no longer refuses to start when a stale PID file points at a PID that an unrelated live process has reused on Linux.
+
 ## [0.18.1] - 2026-10-22
 
 ### Changed

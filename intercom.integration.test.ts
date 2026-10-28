@@ -5728,3 +5728,66 @@ test("registered inline renderer follows real CustomMessageComponent rebuild and
     });
   }
 });
+
+test("/intercom-mention inserts a resolvable mention and intercom instruction into the editor", { concurrency: false }, async () => {
+  const { default: piIntercomExtension } = await import("./index.ts");
+  const { planner, cleanup } = await setupClients();
+  let editorText = "";
+  const harness = createExtensionHarness("inline-session-worker", {
+    hasUI: true,
+    ui: {
+      notify: () => undefined,
+      getEditorText: () => editorText,
+      setEditorText: (text: string) => { editorText = text; },
+    },
+  });
+
+  try {
+    piIntercomExtension(harness.pi as never);
+    await harness.emitLifecycle("session_start");
+    await waitForSessionByName(planner, "inline-session-worker");
+
+    editorText = "Please sync with";
+    await harness.commands.get("intercom-mention")!("planner", harness.ctx);
+
+    assert.match(editorText, /^Please sync with\n\n#planner /);
+    assert.match(editorText, /communicate with Pi session "planner" \(ID: .*\)/);
+    assert.match(editorText, /Prefer send for non-blocking updates and ask when a reply is required/);
+  } finally {
+    await harness.emitLifecycle("session_shutdown");
+    await cleanup();
+  }
+});
+
+test("/intercom-mention reports unknown targets and requires an argument", { concurrency: false }, async () => {
+  const { default: piIntercomExtension } = await import("./index.ts");
+  const { planner, cleanup } = await setupClients();
+  const notifications: string[] = [];
+  let editorText = "";
+  const harness = createExtensionHarness("inline-session-bystander", {
+    hasUI: true,
+    ui: {
+      notify: (message: string) => notifications.push(message),
+      getEditorText: () => editorText,
+      setEditorText: (text: string) => { editorText = text; },
+    },
+  });
+
+  try {
+    piIntercomExtension(harness.pi as never);
+    await harness.emitLifecycle("session_start");
+    await waitForSessionByName(planner, "inline-session-bystander");
+
+    await harness.commands.get("intercom-mention")!("   ", harness.ctx);
+    assert.match(notifications.at(-1) ?? "", /Usage: \/intercom-mention/);
+
+    await harness.commands.get("intercom-mention")!("nobody-here", harness.ctx);
+    assert.match(notifications.at(-1) ?? "", /No connected intercom session matches "nobody-here"/);
+
+    // Nothing is ever written into the editor unless a target resolves.
+    assert.equal(editorText, "");
+  } finally {
+    await harness.emitLifecycle("session_shutdown");
+    await cleanup();
+  }
+});

@@ -84,6 +84,20 @@ Press **Alt+M** or type `/intercom` to open the session list overlay:
 
 Press **h** on a highlighted session to hand this session over to it instead (see [Workflow: Handing Over a Session](#workflow-handing-over-a-session)).
 
+### Inline Session Mentions
+
+Type `#` in the TUI input box to autocomplete connected intercom sessions, then run `/intercom-mention <name or ID>` to insert a ready-to-send mention into the editor:
+
+```
+#planner Use the intercom tool to communicate with Pi session "planner" (ID: ...). Prefer send for non-blocking updates and ask when a reply is required.
+```
+
+The mention you type is the same text the model receives, so you can edit or delete it before sending. A mention can use a session name or a session ID prefix, for example `#planner` or `#8f3d2a11`. Duplicate session names fall back to session IDs, and pi-intercom only offers values that resolve back to the exact session they name.
+
+Completion pops up when `#` starts a line or follows a space or tab. Typed straight after other characters — `ask#planner`, `http://host#frag` — it stays quiet; press **Tab** there to complete anyway. A `#` that matches no connected session, such as a Markdown heading or an issue number, is left alone. The positional rule comes from Pi's editor, not from pi-intercom.
+
+For this session's own handoff target, use `/intercom-id` instead.
+
 ### From the Agent
 
 The agent can list sessions and send messages using the `intercom` tool. Tool calls and results render as compact transcript rows so send/ask/reply flows are easy to scan. Use `/intercom-id` to insert a handoff snippet for the current session's stable intercom target into the editor. For common patterns like planner-worker delegation, the bundled `pi-intercom` skill provides copy-paste ready examples:

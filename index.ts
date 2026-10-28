@@ -2,7 +2,7 @@ import { BorderedLoader, defineTool, VERSION, type ExtensionAPI, type ExtensionC
 import { StringEnum } from "@earendil-works/pi-ai";
 import { randomUUID } from "crypto";
 import { Type } from "typebox";
-import { Text } from "@earendil-works/pi-tui";
+import { Text, type AutocompleteProvider } from "@earendil-works/pi-tui";
 import { IntercomClient, IntercomSessionHeldError, type SendResult } from "./broker/client.ts";
 import { spawnBrokerIfNeeded } from "./broker/spawn.ts";
 import { SessionListOverlay, type SessionListSelection } from "./ui/session-list.ts";
@@ -12,6 +12,7 @@ import { InlineMessageComponent } from "./ui/inline-message.ts";
 import { getAskTimeoutMs, getIntercomScopeId, loadConfig, setIntercomScopeId, type IntercomConfig } from "./config.ts";
 import { EXTENSION_BUS_FEATURE } from "./types.ts";
 import type { Attachment, BrokerMessage, Message, MessageControl, MessageReceiptStatus, SessionInfo, SessionRegistration } from "./types.ts";
+import { createIntercomSessionAutocompleteProvider, formatIntercomMention, resolveSessionMention } from "./inline-session.ts";
 import {
   INTERCOM_EXTENSION_REGISTER_EVENT,
   INTERCOM_EXTENSION_REGISTRY_READY_EVENT,
@@ -1646,6 +1647,16 @@ export default function piIntercomExtension(pi: ExtensionAPI, piVersion = VERSIO
     reconnectPromiseGeneration = generationAtStart;
     return nextReconnectPromise;
   }
+  // Throws when the broker is unreachable: callers must be able to tell "no peers" apart
+  // from "could not ask". Only the autocomplete path degrades to an empty roster.
+  async function listIntercomSessions(): Promise<SessionInfo[]> {
+    const activeClient = await ensureConnected("tool");
+    const sessions = await activeClient.listSessions();
+    const currentSessionId = activeClient.sessionId;
+    return currentSessionId
+      ? sessions.filter((session) => session.id !== currentSessionId)
+      : sessions;
+  }
   async function resolveSessionTarget(activeClient: IntercomClient, nameOrId: string): Promise<string | null> {
     const sessions = await activeClient.listSessions();
     const byId = sessions.find(s => s.id === nameOrId);
@@ -2192,6 +2203,20 @@ export default function piIntercomExtension(pi: ExtensionAPI, piVersion = VERSIO
       return;
     }
     startSessionRuntime(ctx);
+    // ctx.ui is a full ExtensionUIContext in pi, but partial fakes appear in tests and
+    // older hosts, so probe the method like insertIntoEditor does.
+    const ui = ctx.ui as { addAutocompleteProvider?: (factory: (current: AutocompleteProvider) => AutocompleteProvider) => void } | undefined;
+    if (ctx.hasUI && ui && typeof ui.addAutocompleteProvider === "function") {
+      // Suggestions are best-effort, so an unreachable broker yields an empty roster
+      // instead of surfacing an error while the user is still typing.
+      ui.addAutocompleteProvider((current) => createIntercomSessionAutocompleteProvider(current, async () => {
+        try {
+          return await listIntercomSessions();
+        } catch {
+          return [];
+        }
+      }));
+    }
   });
   
   pi.on("session_shutdown", async () => {
@@ -3103,6 +3128,33 @@ Usage:
     notifyIfLive(liveContext, `Intercom contact target: ${sessionId}`, "info", commandGeneration);
   }
 
+  async function insertIntercomMention(args: string, ctx: ExtensionContext): Promise<void> {
+    const commandGeneration = runtimeGeneration;
+    const liveContext = getLiveContext(ctx, commandGeneration);
+    if (!liveContext) return;
+    if (!args.trim()) {
+      notifyIfLive(liveContext, "Usage: /intercom-mention <session name or ID>", "warning", commandGeneration);
+      return;
+    }
+    let sessions: SessionInfo[];
+    try {
+      sessions = await listIntercomSessions();
+    } catch (error) {
+      notifyIfLive(ctx, `Intercom unavailable: ${getErrorMessage(error)}`, "error", commandGeneration);
+      return;
+    }
+    if (!getLiveContext(liveContext, commandGeneration)) return;
+    const session = resolveSessionMention(sessions, args);
+    if (!session) {
+      notifyIfLive(liveContext, `No connected intercom session matches "${args.trim()}".`, "warning", commandGeneration);
+      return;
+    }
+    if (!insertIntoEditor(liveContext, formatIntercomMention(session, sessions))) {
+      notifyIfLive(liveContext, "Session mentions need an interactive editor.", "warning", commandGeneration);
+      return;
+    }
+    notifyIfLive(liveContext, `Inserted intercom mention for ${session.name || session.id}; review and send.`, "info", commandGeneration);
+  }
   async function setIntercomAlias(args: string, ctx: ExtensionContext): Promise<void> {
     const commandGeneration = runtimeGeneration;
     const liveContext = getLiveContext(ctx, commandGeneration);
@@ -3407,6 +3459,11 @@ Usage:
   pi.registerCommand("intercom-id", {
     description: "Insert a stable pi-intercom handoff snippet for this session into the editor",
     handler: async (_args, ctx) => insertIntercomId(ctx),
+  });
+
+  pi.registerCommand("intercom-mention", {
+    description: "Insert an intercom mention for another session into the editor (usage: /intercom-mention <name or ID>)",
+    handler: async (args, ctx) => insertIntercomMention(args, ctx),
   });
 
   pi.registerCommand("intercom-pool", {

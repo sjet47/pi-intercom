@@ -21,7 +21,7 @@ import { sameCwd } from "../cwd.ts";
 import { EXACT_SEND_FEATURE, EXTENSION_BUS_FEATURE, SESSION_HELD_ERROR_CODE } from "../types.ts";
 import type { DeliveryState, SessionInfo, Message, BrokerMessage, ExtensionCapability, MessageControl, MessageReceiptStatus } from "../types.ts";
 import { ExtensionStateManager } from "./extension-state.ts";
-import { assertNoLiveBroker } from "./runtime-claim.ts";
+import { assertNoLiveBroker, currentBrokerProcessIdentity, formatBrokerPidFile } from "./runtime-claim.ts";
 import { resolveHerdrLocations } from "../herdr-location.ts";
 
 const INTERCOM_DIR = getIntercomDirPath();
@@ -292,7 +292,7 @@ class IntercomBroker {
         writeFileSync(PORT_PATH, `${JSON.stringify(endpoint)}\n`, { mode: INTERCOM_RUNTIME_FILE_MODE });
         restrictIntercomRuntimeFile(PORT_PATH);
       }
-      writeFileSync(PID_PATH, String(process.pid), { mode: INTERCOM_RUNTIME_FILE_MODE });
+      writeFileSync(PID_PATH, formatBrokerPidFile(currentBrokerProcessIdentity()), { mode: INTERCOM_RUNTIME_FILE_MODE });
       restrictIntercomRuntimeFile(PID_PATH);
       console.log(`Intercom broker started (pid: ${process.pid})`);
     };
